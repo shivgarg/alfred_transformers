@@ -1,0 +1,9 @@
+exp
+*.sh
+**/__pycache__
+*.pyc
+*.err
+*.log
+*.out
+*.condor
+data/json_feat_2.1.0
