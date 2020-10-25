@@ -11,7 +11,14 @@ from data.preprocess import Dataset
 from importlib import import_module
 from argparse import ArgumentDefaultsHelpFormatter, ArgumentParser
 from models.utils.helper_utils import optimizer_to
+import torch.nn as nn
 
+class DataParallel(nn.DataParallel):
+    def __getattr__(self, name):
+        if name == 'module':
+            return super().__getattr__('module')
+        else:
+            return getattr(self.module, name)
 
 if __name__ == '__main__':
     # parser
@@ -100,7 +107,10 @@ if __name__ == '__main__':
         optimizer = None
 
     # to gpu
+    device_ids = [i for i in range(torch.cuda.device_count())] 
+    print(device_ids)
     if args.gpu:
+        model = DataParallel(model, device_ids)
         model = model.to(torch.device('cuda'))
         if not optimizer is None:
             optimizer_to(optimizer, torch.device('cuda'))
