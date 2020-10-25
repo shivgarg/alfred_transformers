@@ -57,7 +57,7 @@ class Module(Base):
 
         # params
         self.max_subgoals = 25
-
+        self.max_episode_len = args.max_episode_len
         # reset model
         self.reset()
 
@@ -101,7 +101,7 @@ class Module(Base):
             # append goal + instr
             lang_goal_instr = lang_goal + lang_instr
             feat['lang_goal_instr'].append(lang_goal_instr)
-
+            episode_len = 0
             # load Resnet features from disk
             if load_frames and not self.test_mode:
                 root = self.get_task_root(ex)
@@ -124,24 +124,33 @@ class Module(Base):
                         if keep[d['low_idx']] is None:
                             keep[d['low_idx']] = im[i]
                     keep.append(keep[-1])  # stop frame
+                    episode_len = min(self.max_episode_len, len(keep))
+                    keep = keep[:episode_len]
                     feat['frames'].append(torch.stack(keep, dim=0))
                 else:
+                    episode_len = min(self.max_episode_len, len(im))
+                    im = im[:episode_len]
                     feat['frames'].append(torch.cat([im, im[-1].unsqueeze(0)], dim=0))  # add stop frame
 
             #########
             # outputs
             #########
-
+            if self.args.subgoal_aux_loss_wt > 0:
+                feat['subgoals_completed'][-1] = feat['subgoals_completed'][-1][:episode_len]
+    
+            if self.args.pm_aux_loss_wt > 0:
+                feat['subgoal_progress'][-1] = feat['subgoal_progress'][-1][:episode_len]
+ 
             if not self.test_mode:
                 # low-level action
-                feat['action_low'].append([a['action'] for a in ex['num']['action_low']])
+                feat['action_low'].append([a['action'] for a in ex['num']['action_low']][:episode_len])
 
                 # low-level action mask
                 if load_mask:
-                    feat['action_low_mask'].append([self.decompress_mask(a['mask']) for a in ex['num']['action_low'] if a['mask'] is not None])
+                    feat['action_low_mask'].append([self.decompress_mask(a['mask']) for i,a in enumerate(ex['num']['action_low']) if a['mask'] is not None and i<episode_len])
 
                 # low-level valid interact
-                feat['action_low_valid_interact'].append([a['valid_interact'] for a in ex['num']['action_low']])
+                feat['action_low_valid_interact'].append([a['valid_interact'] for a in ex['num']['action_low']][:episode_len])
 
 
         # tensorization and padding
@@ -196,7 +205,7 @@ class Module(Base):
         cont_lang, enc_lang = self.encode_lang(feat)
         state_0 = cont_lang, torch.zeros_like(cont_lang)
         frames = self.vis_dropout(feat['frames'])
-        res = self.dec(enc_lang, frames, max_decode=max_decode, gold=feat['action_low'], state_0=state_0)
+        res = self.dec(enc_lang, frames, max_decode=self.max_episode_len, gold=feat['action_low'], state_0=state_0)
         feat.update(res)
         return feat
 
@@ -321,12 +330,14 @@ class Module(Base):
         losses['action_low'] = alow_loss * self.args.action_loss_wt
 
         # mask loss
+        
         valid_idxs = valid.view(-1).nonzero().view(-1)
         flat_p_alow_mask = p_alow_mask.view(p_alow_mask.shape[0]*p_alow_mask.shape[1], *p_alow_mask.shape[2:])[valid_idxs]
-        flat_alow_mask = torch.cat(feat['action_low_mask'], dim=0)
-        alow_mask_loss = self.weighted_mask_loss(flat_p_alow_mask, flat_alow_mask)
-        losses['action_low_mask'] = alow_mask_loss * self.args.mask_loss_wt
-
+        if flat_p_alow_mask.shape[0]!=0:
+            flat_alow_mask = torch.cat(feat['action_low_mask'], dim=0)
+            alow_mask_loss = self.weighted_mask_loss(flat_p_alow_mask, flat_alow_mask)
+            losses['action_low_mask'] = alow_mask_loss * self.args.mask_loss_wt
+        
         # subgoal completion loss
         if self.args.subgoal_aux_loss_wt > 0:
             p_subgoal = feat['out_subgoal'].squeeze(2)
