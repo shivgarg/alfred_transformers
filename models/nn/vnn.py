@@ -382,11 +382,10 @@ class ConvFrameMaskDecoderProgressMonitorFinetune(nn.Module):
         return action_t, mask_t, state_t, lang_attn_t, subgoal_t, progress_t
 
     def forward(self, enc, frames, gold=None, max_decode=150, state_0=None):
-        max_t = gold.size(1) if self.training else min(max_decode, frames.shape[1])
+        max_t = min(max_decode,gold.size(1)) if self.training else min(max_decode, frames.shape[1])
         batch = enc.size(0)
         e_t = self.go.repeat(batch, 1)
         state_t = state_0
-
         actions = []
         masks = []
         attn_scores = []

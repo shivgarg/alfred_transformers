@@ -7,3 +7,5 @@ exp
 *.out
 *.condor
 data/json_feat_2.1.0
+data/full_2.1.0.7z
+
