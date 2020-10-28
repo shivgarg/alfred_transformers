@@ -187,8 +187,8 @@ If you find the dataset or code useful, please cite:
 
 ## License
 
-MIT License
-
+MIT License  
+Baseline code fork of [alfred](https://github.com/askforalfred/alfred).
 ## Change Log
 
 07/04/2020:
