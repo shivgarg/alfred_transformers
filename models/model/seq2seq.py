@@ -39,164 +39,6 @@ class Module(nn.Module):
         # summary self.writer
         self.summary_writer = None
 
-    def run_train(self, splits, args=None, optimizer=None):
-        '''
-        training loop
-        '''
-
-        # args
-        args = args or self.args
-
-        # splits
-        train = splits['train']
-        valid_seen = splits['valid_seen']
-        valid_unseen = splits['valid_unseen']
-
-        # debugging: chose a small fraction of the dataset
-        if self.args.dataset_fraction > 0:
-            small_train_size = int(self.args.dataset_fraction * 0.7)
-            small_valid_size = int((self.args.dataset_fraction * 0.3) / 2)
-            train = train[:small_train_size]
-            valid_seen = valid_seen[:small_valid_size]
-            valid_unseen = valid_unseen[:small_valid_size]
-
-        # debugging: use to check if training loop works without waiting for full epoch
-        if self.args.fast_epoch:
-            train = train[:16]
-            valid_seen = valid_seen[:16]
-            valid_unseen = valid_unseen[:16]
-
-        # initialize summary writer for tensorboardX
-        self.summary_writer = SummaryWriter(log_dir=args.dout)
-
-        # dump config
-        fconfig = os.path.join(args.dout, 'config.json')
-        with open(fconfig, 'wt') as f:
-            json.dump(vars(args), f, indent=2)
-
-        # optimizer
-        optimizer = optimizer or torch.optim.Adam(self.parameters(), lr=args.lr)
-
-        # display dout
-        print("Saving to: %s" % self.args.dout)
-        best_loss = {'train': 1e10, 'valid_seen': 1e10, 'valid_unseen': 1e10}
-        train_iter, valid_seen_iter, valid_unseen_iter = 0, 0, 0
-        for epoch in trange(0, args.epoch, desc='epoch'):
-            m_train = collections.defaultdict(list)
-            self.train()
-            self.adjust_lr(optimizer, args.lr, epoch, decay_epoch=args.decay_epoch)
-            # p_train = {}
-            total_train_loss = list()
-            random.shuffle(train) # shuffle every epoch
-            for batch, feat in self.iterate(train, args.batch):
-                out = self.forward(feat)
-                preds = self.extract_preds(out, batch, feat)
-                # p_train.update(preds)
-                loss = self.compute_loss(out, batch, feat)
-                for k, v in loss.items():
-                    ln = 'loss_' + k
-                    m_train[ln].append(v.item())
-                    self.summary_writer.add_scalar('train/' + ln, v.item(), train_iter)
-
-                # optimizer backward pass
-                optimizer.zero_grad()
-                sum_loss = sum(loss.values())
-                sum_loss.backward()
-                optimizer.step()
-
-                self.summary_writer.add_scalar('train/loss', sum_loss, train_iter)
-                sum_loss = sum_loss.detach().cpu()
-                total_train_loss.append(float(sum_loss))
-                train_iter += self.args.batch
-
-            ## compute metrics for train (too memory heavy!)
-            # m_train = {k: sum(v) / len(v) for k, v in m_train.items()}
-            # m_train.update(self.compute_metric(p_train, train))
-            # m_train['total_loss'] = sum(total_train_loss) / len(total_train_loss)
-            # self.summary_writer.add_scalar('train/total_loss', m_train['total_loss'], train_iter)
-
-            # compute metrics for valid_seen
-            p_valid_seen, valid_seen_iter, total_valid_seen_loss, m_valid_seen = self.run_pred(valid_seen, args=args, name='valid_seen', iter=valid_seen_iter)
-            m_valid_seen.update(self.compute_metric(p_valid_seen, valid_seen))
-            m_valid_seen['total_loss'] = float(total_valid_seen_loss)
-            self.summary_writer.add_scalar('valid_seen/total_loss', m_valid_seen['total_loss'], valid_seen_iter)
-
-            # compute metrics for valid_unseen
-            p_valid_unseen, valid_unseen_iter, total_valid_unseen_loss, m_valid_unseen = self.run_pred(valid_unseen, args=args, name='valid_unseen', iter=valid_unseen_iter)
-            m_valid_unseen.update(self.compute_metric(p_valid_unseen, valid_unseen))
-            m_valid_unseen['total_loss'] = float(total_valid_unseen_loss)
-            self.summary_writer.add_scalar('valid_unseen/total_loss', m_valid_unseen['total_loss'], valid_unseen_iter)
-
-            stats = {'epoch': epoch,
-                     'valid_seen': m_valid_seen,
-                     'valid_unseen': m_valid_unseen}
-
-            # new best valid_seen loss
-            if total_valid_seen_loss < best_loss['valid_seen']:
-                print('\nFound new best valid_seen!! Saving...')
-                fsave = os.path.join(args.dout, 'best_seen.pth')
-                torch.save({
-                    'metric': stats,
-                    'model': self.state_dict(),
-                    'optim': optimizer.state_dict(),
-                    'args': self.args,
-                    'vocab': self.vocab,
-                }, fsave)
-                fbest = os.path.join(args.dout, 'best_seen.json')
-                with open(fbest, 'wt') as f:
-                    json.dump(stats, f, indent=2)
-
-                fpred = os.path.join(args.dout, 'valid_seen.debug.preds.json')
-                with open(fpred, 'wt') as f:
-                    json.dump(self.make_debug(p_valid_seen, valid_seen), f, indent=2)
-                best_loss['valid_seen'] = total_valid_seen_loss
-
-            # new best valid_unseen loss
-            if total_valid_unseen_loss < best_loss['valid_unseen']:
-                print('Found new best valid_unseen!! Saving...')
-                fsave = os.path.join(args.dout, 'best_unseen.pth')
-                torch.save({
-                    'metric': stats,
-                    'model': self.state_dict(),
-                    'optim': optimizer.state_dict(),
-                    'args': self.args,
-                    'vocab': self.vocab,
-                }, fsave)
-                fbest = os.path.join(args.dout, 'best_unseen.json')
-                with open(fbest, 'wt') as f:
-                    json.dump(stats, f, indent=2)
-
-                fpred = os.path.join(args.dout, 'valid_unseen.debug.preds.json')
-                with open(fpred, 'wt') as f:
-                    json.dump(self.make_debug(p_valid_unseen, valid_unseen), f, indent=2)
-
-                best_loss['valid_unseen'] = total_valid_unseen_loss
-
-            # save the latest checkpoint
-            if args.save_every_epoch:
-                fsave = os.path.join(args.dout, 'net_epoch_%d.pth' % epoch)
-            else:
-                fsave = os.path.join(args.dout, 'latest.pth')
-            torch.save({
-                'metric': stats,
-                'model': self.state_dict(),
-                'optim': optimizer.state_dict(),
-                'args': self.args,
-                'vocab': self.vocab,
-            }, fsave)
-
-            ## debug action output json for train
-            # fpred = os.path.join(args.dout, 'train.debug.preds.json')
-            # with open(fpred, 'wt') as f:
-            #     json.dump(self.make_debug(p_train, train), f, indent=2)
-
-            # write stats
-            for split in stats.keys():
-                if isinstance(stats[split], dict):
-                    for k, v in stats[split].items():
-                        self.summary_writer.add_scalar(split + '/' + k, v, train_iter)
-            pprint.pprint(stats)
-
     def run_pred(self, dev, args=None, name='dev', iter=0):
         '''
         validation loop
@@ -332,3 +174,171 @@ class Module(nn.Module):
             return False
         else:
             return True
+
+
+class DataParallel(nn.DataParallel):
+    def __getattr__(self, name):
+        if name == 'module':
+            return super().__getattr__('module')
+        else:
+            return getattr(self.module, name)
+
+    def run_train(self, splits, args=None, optimizer=None):
+        '''
+        training loop
+        '''
+
+        # args
+        args = args or self.args
+
+        # splits
+        train = splits['train']
+        valid_seen = splits['valid_seen']
+        valid_unseen = splits['valid_unseen']
+
+        # debugging: chose a small fraction of the dataset
+        if self.args.dataset_fraction > 0:
+            small_train_size = int(self.args.dataset_fraction * 0.7)
+            small_valid_size = int((self.args.dataset_fraction * 0.3) / 2)
+            train = train[:small_train_size]
+            valid_seen = valid_seen[:small_valid_size]
+            valid_unseen = valid_unseen[:small_valid_size]
+
+        # debugging: use to check if training loop works without waiting for full epoch
+        if self.args.fast_epoch:
+            train = train[:16]
+            valid_seen = valid_seen[:16]
+            valid_unseen = valid_unseen[:16]
+
+        # initialize summary writer for tensorboardX
+        self.summary_writer = SummaryWriter(log_dir=args.dout)
+
+        # dump config
+        fconfig = os.path.join(args.dout, 'config.json')
+        with open(fconfig, 'wt') as f:
+            json.dump(vars(args), f, indent=2)
+
+        # optimizer
+        optimizer = optimizer or torch.optim.Adam(self.parameters(), lr=args.lr)
+
+        # display dout
+        print("Saving to: %s" % self.args.dout)
+        best_loss = {'train': 1e10, 'valid_seen': 1e10, 'valid_unseen': 1e10}
+        train_iter, valid_seen_iter, valid_unseen_iter = 0, 0, 0
+        for epoch in trange(0, args.epoch, desc='epoch'):
+            m_train = collections.defaultdict(list)
+            self.train()
+            self.adjust_lr(optimizer, args.lr, epoch, decay_epoch=args.decay_epoch)
+            # p_train = {}
+            total_train_loss = list()
+            random.shuffle(train) # shuffle every epoch
+            for batch, feat in self.iterate(train, args.batch):
+                out = self.forward(dict(feat))
+                preds = self.extract_preds(out, batch, feat)
+                # p_train.update(preds)
+                loss = self.compute_loss(out, batch, feat)
+                for k, v in loss.items():
+                    ln = 'loss_' + k
+                    m_train[ln].append(v.item())
+                    self.summary_writer.add_scalar('train/' + ln, v.item(), train_iter)
+
+                # optimizer backward pass
+                optimizer.zero_grad()
+                sum_loss = sum(loss.values())
+                sum_loss.backward()
+                optimizer.step()
+
+                self.summary_writer.add_scalar('train/loss', sum_loss, train_iter)
+                sum_loss = sum_loss.detach().cpu()
+                total_train_loss.append(float(sum_loss))
+                train_iter += self.args.batch
+
+            ## compute metrics for train (too memory heavy!)
+            # m_train = {k: sum(v) / len(v) for k, v in m_train.items()}
+            # m_train.update(self.compute_metric(p_train, train))
+            # m_train['total_loss'] = sum(total_train_loss) / len(total_train_loss)
+            # self.summary_writer.add_scalar('train/total_loss', m_train['total_loss'], train_iter)
+
+            # compute metrics for valid_seen
+            p_valid_seen, valid_seen_iter, total_valid_seen_loss, m_valid_seen = self.run_pred(valid_seen, args=args, name='valid_seen', iter=valid_seen_iter)
+            m_valid_seen.update(self.compute_metric(p_valid_seen, valid_seen))
+            m_valid_seen['total_loss'] = float(total_valid_seen_loss)
+            self.summary_writer.add_scalar('valid_seen/total_loss', m_valid_seen['total_loss'], valid_seen_iter)
+
+            # compute metrics for valid_unseen
+            p_valid_unseen, valid_unseen_iter, total_valid_unseen_loss, m_valid_unseen = self.run_pred(valid_unseen, args=args, name='valid_unseen', iter=valid_unseen_iter)
+            m_valid_unseen.update(self.compute_metric(p_valid_unseen, valid_unseen))
+            m_valid_unseen['total_loss'] = float(total_valid_unseen_loss)
+            self.summary_writer.add_scalar('valid_unseen/total_loss', m_valid_unseen['total_loss'], valid_unseen_iter)
+
+            stats = {'epoch': epoch,
+                     'valid_seen': m_valid_seen,
+                     'valid_unseen': m_valid_unseen}
+
+            # new best valid_seen loss
+            if total_valid_seen_loss < best_loss['valid_seen']:
+                print('\nFound new best valid_seen!! Saving...')
+                fsave = os.path.join(args.dout, 'best_seen.pth')
+                torch.save({
+                    'metric': stats,
+                    'model': self.state_dict(),
+                    'optim': optimizer.state_dict(),
+                    'args': self.args,
+                    'vocab': self.vocab,
+                }, fsave)
+                fbest = os.path.join(args.dout, 'best_seen.json')
+                with open(fbest, 'wt') as f:
+                    json.dump(stats, f, indent=2)
+
+                fpred = os.path.join(args.dout, 'valid_seen.debug.preds.json')
+                with open(fpred, 'wt') as f:
+                    json.dump(self.make_debug(p_valid_seen, valid_seen), f, indent=2)
+                best_loss['valid_seen'] = total_valid_seen_loss
+
+            # new best valid_unseen loss
+            if total_valid_unseen_loss < best_loss['valid_unseen']:
+                print('Found new best valid_unseen!! Saving...')
+                fsave = os.path.join(args.dout, 'best_unseen.pth')
+                torch.save({
+                    'metric': stats,
+                    'model': self.state_dict(),
+                    'optim': optimizer.state_dict(),
+                    'args': self.args,
+                    'vocab': self.vocab,
+                }, fsave)
+                fbest = os.path.join(args.dout, 'best_unseen.json')
+                with open(fbest, 'wt') as f:
+                    json.dump(stats, f, indent=2)
+
+                fpred = os.path.join(args.dout, 'valid_unseen.debug.preds.json')
+                with open(fpred, 'wt') as f:
+                    json.dump(self.make_debug(p_valid_unseen, valid_unseen), f, indent=2)
+
+                best_loss['valid_unseen'] = total_valid_unseen_loss
+
+            # save the latest checkpoint
+            if args.save_every_epoch:
+                fsave = os.path.join(args.dout, 'net_epoch_%d.pth' % epoch)
+            else:
+                fsave = os.path.join(args.dout, 'latest.pth')
+            torch.save({
+                'metric': stats,
+                'model': self.state_dict(),
+                'optim': optimizer.state_dict(),
+                'args': self.args,
+                'vocab': self.vocab,
+            }, fsave)
+
+            ## debug action output json for train
+            # fpred = os.path.join(args.dout, 'train.debug.preds.json')
+            # with open(fpred, 'wt') as f:
+            #     json.dump(self.make_debug(p_train, train), f, indent=2)
+
+            # write stats
+            for split in stats.keys():
+                if isinstance(stats[split], dict):
+                    for k, v in stats[split].items():
+                        self.summary_writer.add_scalar(split + '/' + k, v, train_iter)
+            pprint.pprint(stats)
+
+
