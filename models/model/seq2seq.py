@@ -5,6 +5,7 @@ import torch
 import pprint
 import collections
 import numpy as np
+import sys
 from torch import nn
 from tensorboardX import SummaryWriter
 from tqdm import trange
@@ -233,10 +234,19 @@ class DataParallel(nn.DataParallel):
             total_train_loss = list()
             random.shuffle(train) # shuffle every epoch
             for batch, feat in self.iterate(train, args.batch):
-                out = self.forward(dict(feat))
-                preds = self.extract_preds(out, batch, feat)
+                out = dict()
+                out_action_low, out_action_low_mask, out_attn_scores, out_subgoal, out_progress, state_t = self.forward(dict(feat))
+                for k in feat:
+                    out[k] = feat[k]
+                out['out_action_low'] = out_action_low
+                out['out_action_low_mask'] = out_action_low_mask
+                out['out_attn_scores'] = out_attn_scores
+                out['out_subgoal'] = out_subgoal
+                out['out_progress'] = out_progress
+                out['state_t'] = state_t
+                preds = self.extract_preds(out, batch, out)
                 # p_train.update(preds)
-                loss = self.compute_loss(out, batch, feat)
+                loss = self.compute_loss(out, batch, out)
                 for k, v in loss.items():
                     ln = 'loss_' + k
                     m_train[ln].append(v.item())
@@ -340,5 +350,4 @@ class DataParallel(nn.DataParallel):
                     for k, v in stats[split].items():
                         self.summary_writer.add_scalar(split + '/' + k, v, train_iter)
             pprint.pprint(stats)
-
-
+            sys.flush()

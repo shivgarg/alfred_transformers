@@ -101,6 +101,7 @@ class Module(Base):
             # append goal + instr
             lang_goal_instr = lang_goal + lang_instr
             feat['lang_goal_instr'].append(lang_goal_instr)
+            feat['lang_goal_instr_len'].append(len(lang_goal_instr))
             episode_len = 0
             # load Resnet features from disk
             if load_frames and not self.test_mode:
@@ -152,7 +153,7 @@ class Module(Base):
                 # low-level valid interact
                 feat['action_low_valid_interact'].append([a['valid_interact'] for a in ex['num']['action_low']][:episode_len])
 
-
+        feat['lang_goal_instr_len'] = np.array(feat['lang_goal_instr_len'])
         # tensorization and padding
         for k, v in feat.items():
             if k in {'lang_goal_instr'}:
@@ -162,7 +163,7 @@ class Module(Base):
                 seq_lengths = np.array(list(map(len, v)))
                 embed_seq = self.emb_word(pad_seq)
                 packed_input = pack_padded_sequence(embed_seq, seq_lengths, batch_first=True, enforce_sorted=False)
-                feat[k] = packed_input
+                feat[k] = embed_seq
             elif k in {'action_low_mask'}:
                 # mask padding
                 seqs = [torch.tensor(vv, device=device, dtype=torch.float) for vv in v]
@@ -172,6 +173,8 @@ class Module(Base):
                 seqs = [torch.tensor(vv, device=device, dtype=torch.float) for vv in v]
                 pad_seq = pad_sequence(seqs, batch_first=True, padding_value=self.pad)
                 feat[k] = pad_seq
+            elif k in {'lang_goal_instr_len'}:
+                feat[k] = torch.tensor(feat[k])
             else:
                 # default: tensorize and pad sequence
                 seqs = [torch.tensor(vv, device=device, dtype=torch.float if ('frames' in k) else torch.long) for vv in v]
@@ -207,17 +210,19 @@ class Module(Base):
         frames = self.vis_dropout(feat['frames'])
         res = self.dec(enc_lang, frames, max_decode=self.max_episode_len, gold=feat['action_low'], state_0=state_0)
         feat.update(res)
-        return feat
+        return feat['out_action_low'], feat['out_action_low_mask'], feat['out_attn_scores'], feat['out_subgoal'], feat['out_progress'], feat['state_t']
 
 
     def encode_lang(self, feat):
         '''
         encode goal+instr language
         '''
-        emb_lang_goal_instr = feat['lang_goal_instr']
+        emb_lang_goal_instr, seq_lengths = feat['lang_goal_instr'], feat['lang_goal_instr_len']
+        total_length = emb_lang_goal_instr.size(1)
+        emb_lang_goal_instr = pack_padded_sequence(emb_lang_goal_instr, seq_lengths, batch_first=True, enforce_sorted=False)
         self.lang_dropout(emb_lang_goal_instr.data)
         enc_lang_goal_instr, _ = self.enc(emb_lang_goal_instr)
-        enc_lang_goal_instr, _ = pad_packed_sequence(enc_lang_goal_instr, batch_first=True)
+        enc_lang_goal_instr, _ = pad_packed_sequence(enc_lang_goal_instr, batch_first=True, total_length=total_length)
         self.lang_dropout(enc_lang_goal_instr)
         cont_lang_goal_instr = self.enc_att(enc_lang_goal_instr)
 
