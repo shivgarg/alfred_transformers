@@ -9,7 +9,8 @@ from torch.nn.utils.rnn import pad_sequence, pack_padded_sequence, pad_packed_se
 from model.seq2seq import Module as Base
 from models.utils.metric import compute_f1, compute_exact
 from gen.utils.image_util import decompress_mask
-
+from torchvision import transforms
+from PIL import Image
 
 class Module(Base):
 
@@ -27,7 +28,7 @@ class Module(Base):
         self.subgoal_monitoring = (self.args.pm_aux_loss_wt > 0 or self.args.subgoal_aux_loss_wt > 0)
 
         # frame mask decoder
-        decoder = vnn.ConvFrameMaskDecoderProgressMonitor if self.subgoal_monitoring else vnn.ConvFrameMaskDecoder
+        decoder = vnn.ConvFrameMaskDecoderProgressMonitorFinetune if self.subgoal_monitoring else vnn.ConvFrameMaskDecoder
         self.dec = decoder(self.emb_action_low, args.dframe, 2*args.dhid,
                            pframe=args.pframe,
                            attn_dropout=args.attn_dropout,
@@ -56,7 +57,7 @@ class Module(Base):
 
         # params
         self.max_subgoals = 25
-
+        self.max_episode_len = args.max_episode_len
         # reset model
         self.reset()
 
@@ -100,43 +101,56 @@ class Module(Base):
             # append goal + instr
             lang_goal_instr = lang_goal + lang_instr
             feat['lang_goal_instr'].append(lang_goal_instr)
-
+            episode_len = 0
             # load Resnet features from disk
             if load_frames and not self.test_mode:
                 root = self.get_task_root(ex)
-                im = torch.load(os.path.join(root, self.feat_pt))
-
-                num_low_actions = len(ex['plan']['low_actions']) + 1  # +1 for additional stop action
+                #im = torch.load(os.path.join(root, self.feat_pt))
+                im = []
+                path = "{}/{}".format(root,'raw_images')
+                imgs = sorted(os.listdir(path))
+                tfms = transforms.Compose([transforms.Resize(224), transforms.ToTensor(),
+                       transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),])
+                for img in imgs:
+                    im.append(tfms(Image.open("{}/{}".format(path,img))))
+                im = torch.stack(im)
+                num_low_actions = len(ex['plan']['low_actions'])
                 num_feat_frames = im.shape[0]
 
-                # Modeling Quickstart (without filler frames)
-                if num_low_actions == num_feat_frames:
-                    feat['frames'].append(im)
-
-                # Full Dataset (contains filler frames)
-                else:
-                    keep = [None] * num_low_actions
+                if num_low_actions != num_feat_frames:
+                    keep = [None] * len(ex['plan']['low_actions'])
                     for i, d in enumerate(ex['images']):
                         # only add frames linked with low-level actions (i.e. skip filler frames like smooth rotations and dish washing)
                         if keep[d['low_idx']] is None:
                             keep[d['low_idx']] = im[i]
-                    keep[-1] = im[-1]  # stop frame
+                    keep.append(keep[-1])  # stop frame
+                    episode_len = min(self.max_episode_len, len(keep))
+                    keep = keep[:episode_len]
                     feat['frames'].append(torch.stack(keep, dim=0))
+                else:
+                    episode_len = min(self.max_episode_len, len(im))
+                    im = im[:episode_len]
+                    feat['frames'].append(torch.cat([im, im[-1].unsqueeze(0)], dim=0))  # add stop frame
 
             #########
             # outputs
             #########
-
+            if self.args.subgoal_aux_loss_wt > 0:
+                feat['subgoals_completed'][-1] = feat['subgoals_completed'][-1][:episode_len]
+    
+            if self.args.pm_aux_loss_wt > 0:
+                feat['subgoal_progress'][-1] = feat['subgoal_progress'][-1][:episode_len]
+ 
             if not self.test_mode:
                 # low-level action
-                feat['action_low'].append([a['action'] for a in ex['num']['action_low']])
+                feat['action_low'].append([a['action'] for a in ex['num']['action_low']][:episode_len])
 
                 # low-level action mask
                 if load_mask:
-                    feat['action_low_mask'].append([self.decompress_mask(a['mask']) for a in ex['num']['action_low'] if a['mask'] is not None])
+                    feat['action_low_mask'].append([self.decompress_mask(a['mask']) for i,a in enumerate(ex['num']['action_low']) if a['mask'] is not None and i<episode_len])
 
                 # low-level valid interact
-                feat['action_low_valid_interact'].append([a['valid_interact'] for a in ex['num']['action_low']])
+                feat['action_low_valid_interact'].append([a['valid_interact'] for a in ex['num']['action_low']][:episode_len])
 
 
         # tensorization and padding
@@ -191,7 +205,7 @@ class Module(Base):
         cont_lang, enc_lang = self.encode_lang(feat)
         state_0 = cont_lang, torch.zeros_like(cont_lang)
         frames = self.vis_dropout(feat['frames'])
-        res = self.dec(enc_lang, frames, max_decode=max_decode, gold=feat['action_low'], state_0=state_0)
+        res = self.dec(enc_lang, frames, max_decode=self.max_episode_len, gold=feat['action_low'], state_0=state_0)
         feat.update(res)
         return feat
 
@@ -316,12 +330,14 @@ class Module(Base):
         losses['action_low'] = alow_loss * self.args.action_loss_wt
 
         # mask loss
+        
         valid_idxs = valid.view(-1).nonzero().view(-1)
         flat_p_alow_mask = p_alow_mask.view(p_alow_mask.shape[0]*p_alow_mask.shape[1], *p_alow_mask.shape[2:])[valid_idxs]
-        flat_alow_mask = torch.cat(feat['action_low_mask'], dim=0)
-        alow_mask_loss = self.weighted_mask_loss(flat_p_alow_mask, flat_alow_mask)
-        losses['action_low_mask'] = alow_mask_loss * self.args.mask_loss_wt
-
+        if flat_p_alow_mask.shape[0]!=0:
+            flat_alow_mask = torch.cat(feat['action_low_mask'], dim=0)
+            alow_mask_loss = self.weighted_mask_loss(flat_p_alow_mask, flat_alow_mask)
+            losses['action_low_mask'] = alow_mask_loss * self.args.mask_loss_wt
+        
         # subgoal completion loss
         if self.args.subgoal_aux_loss_wt > 0:
             p_subgoal = feat['out_subgoal'].squeeze(2)

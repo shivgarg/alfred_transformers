@@ -79,18 +79,17 @@ This will create a JSON file, e.g. `task_results_20191218_081448_662435.json`, i
 
 ## Docker Setup
 
+Install [Docker](https://docs.docker.com/engine/install/ubuntu/) and [NVIDIA Docker](https://github.com/NVIDIA/nvidia-docker#ubuntu-160418042004-debian-jessiestretchbuster). 
+
+Modify [docker_build.py](scripts/docker_build.py) and [docker_run.py](scripts/docker_run.py) to your needs.
 
 #### Build 
-
-Install [Docker](https://docs.docker.com/engine/install/ubuntu/) and [NVIDIA Docker](https://github.com/NVIDIA/nvidia-docker#ubuntu-160418042004-debian-jessiestretchbuster).
 
 Build the image:
 
 ```bash
 $ python scripts/docker_build.py 
 ```
-
-Modify [docker_build.py](scripts/docker_build.py) and [docker_run.py](scripts/docker_run.py) to your needs.
 
 #### Run (Local)
 
@@ -117,7 +116,7 @@ $ python scripts/docker_run.py --headless
   sudo nvidia-xconfig -a --use-display-device=None --virtual=1280x1024
   sudo nvidia-xconfig -a --use-display-device=None --virtual=1280x1024
 
-  # start X on DISPLAY 0
+  # start X server on DISPLAY 0
   sudo python ~/alfred/scripts/startx.py 0  # if this throws errors e.g "(EE) Server terminated with error (1)" or "(EE) already running ..." try a display > 0
 
   # detach from tmux shell
@@ -125,6 +124,8 @@ $ python scripts/docker_run.py --headless
 
   # source env
   source ~/alfred_env/bin/activate
+  
+  # set DISPLAY variable to match X server
   export DISPLAY=:0
 
   # check THOR
@@ -141,10 +142,30 @@ You might have to modify `X_DISPLAY` in [gen/constants.py](gen/constants.py) dep
 ## Cloud Instance
 
 ALFRED can be setup on headless machines like AWS or GoogleCloud instances. 
-The main requirement is that you have access to a GPU machine that supports OpenGL rendering. Run the [startx.py](scripts/startx.py) script
-to examine the GPU devices on the host, generate a xorg.conf file, and then start X. You should be able to run AI2THOR normally for evaluation purposes. 
-By default, the `:0.0` display will be used, but if you are running on a machine with more than one GPU, you can address 
-these by modifying the screen component of the display. So `:0.0` refers to the first device, `:0.1` the second and so on.
+The main requirement is that you have access to a GPU machine that supports OpenGL rendering. Run [startx.py](scripts/startx.py) in a tmux shell:
+```bash
+# start tmux session
+$ tmux new -s startx 
+
+# start X server on DISPLAY 0
+$ sudo python $ALFRED_ROOT/scripts/startx.py 0  # if this throws errors e.g "(EE) Server terminated with error (1)" or "(EE) already running ..." try a display > 0
+
+# detach from tmux shell
+# Ctrl+b then d
+
+# set DISPLAY variable to match X server
+$ export DISPLAY=:0
+
+# check THOR
+$ cd $ALFRED_ROOT
+$ python scripts/check_thor.py
+
+###############
+## (300, 300, 3)
+## Everything works!!!
+```
+
+You might have to modify `X_DISPLAY` in [gen/constants.py](gen/constants.py) depending on which display you use.
 
 Also, checkout this guide: [Setting up THOR on Google Cloud](https://medium.com/@etendue2013/how-to-run-ai2-thor-simulation-fast-with-google-cloud-platform-gcp-c9fcde213a4a)
 
@@ -166,8 +187,8 @@ If you find the dataset or code useful, please cite:
 
 ## License
 
-MIT License
-
+MIT License  
+Baseline code fork of [alfred](https://github.com/askforalfred/alfred).
 ## Change Log
 
 07/04/2020:
