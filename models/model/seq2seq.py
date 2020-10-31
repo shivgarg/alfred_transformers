@@ -40,34 +40,6 @@ class Module(nn.Module):
         # summary self.writer
         self.summary_writer = None
 
-    def run_pred(self, dev, args=None, name='dev', iter=0):
-        '''
-        validation loop
-        '''
-        args = args or self.args
-        m_dev = collections.defaultdict(list)
-        p_dev = {}
-        self.eval()
-        total_loss = list()
-        dev_iter = iter
-        for batch, feat in self.iterate(dev, args.batch):
-            out = self.forward(feat)
-            preds = self.extract_preds(out, batch, feat)
-            p_dev.update(preds)
-            loss = self.compute_loss(out, batch, feat)
-            for k, v in loss.items():
-                ln = 'loss_' + k
-                m_dev[ln].append(v.item())
-                self.summary_writer.add_scalar("%s/%s" % (name, ln), v.item(), dev_iter)
-            sum_loss = sum(loss.values())
-            self.summary_writer.add_scalar("%s/loss" % (name), sum_loss, dev_iter)
-            total_loss.append(float(sum_loss.detach().cpu()))
-            dev_iter += len(batch)
-
-        m_dev = {k: sum(v) / len(v) for k, v in m_dev.items()}
-        total_loss = sum(total_loss) / len(total_loss)
-        return p_dev, dev_iter, total_loss, m_dev
-
     def featurize(self, batch):
         raise NotImplementedError()
 
@@ -123,7 +95,7 @@ class Module(nn.Module):
         '''
         breaks dataset into batch_size chunks for training
         '''
-        for i in trange(0, len(data), batch_size, desc='batch'):
+        for i in range(0, len(data), batch_size):
             tasks = data[i:i+batch_size]
             batch = [self.load_task_json(task) for task in tasks]
             feat = self.featurize(batch)
@@ -184,6 +156,46 @@ class DataParallel(nn.DataParallel):
         else:
             return getattr(self.module, name)
 
+    def run_pred(self, dev, args=None, name='dev', iter=0):
+        '''
+        validation loop
+        '''
+        args = args or self.args
+        m_dev = collections.defaultdict(list)
+        p_dev = {}
+        self.eval()
+        total_loss = list()
+        dev_iter = iter
+        for batch, feat in self.iterate(dev, args.batch):
+            out = dict()
+            out_action_low, out_action_low_mask, out_attn_scores, out_subgoal, out_progress, state_t = self.forward(dict(feat))
+            for k in feat:
+                out[k] = feat[k]
+            out['out_action_low'] = out_action_low
+            out['out_action_low_mask'] = out_action_low_mask
+            out['out_attn_scores'] = out_attn_scores
+            out['out_subgoal'] = out_subgoal
+            out['out_progress'] = out_progress
+            out['state_t'] = state_t
+            if out['action_low'].shape[0] != out['out_action_low'].shape[0]:
+                continue
+            
+            preds = self.extract_preds(out, batch, out)
+            p_dev.update(preds)
+            loss = self.compute_loss(out, batch, out)
+            for k, v in loss.items():
+                ln = 'loss_' + k
+                m_dev[ln].append(v.item())
+                self.summary_writer.add_scalar("%s/%s" % (name, ln), v.item(), dev_iter)
+            sum_loss = sum(loss.values())
+            self.summary_writer.add_scalar("%s/loss" % (name), sum_loss, dev_iter)
+            total_loss.append(float(sum_loss.detach().cpu()))
+            dev_iter += len(batch)
+
+        m_dev = {k: sum(v) / len(v) for k, v in m_dev.items()}
+        total_loss = sum(total_loss) / len(total_loss)
+        return p_dev, dev_iter, total_loss, m_dev
+
     def run_train(self, splits, args=None, optimizer=None):
         '''
         training loop
@@ -234,34 +246,40 @@ class DataParallel(nn.DataParallel):
             total_train_loss = list()
             random.shuffle(train) # shuffle every epoch
             for batch, feat in self.iterate(train, args.batch):
-                out = dict()
-                out_action_low, out_action_low_mask, out_attn_scores, out_subgoal, out_progress, state_t = self.forward(dict(feat))
-                for k in feat:
-                    out[k] = feat[k]
-                out['out_action_low'] = out_action_low
-                out['out_action_low_mask'] = out_action_low_mask
-                out['out_attn_scores'] = out_attn_scores
-                out['out_subgoal'] = out_subgoal
-                out['out_progress'] = out_progress
-                out['state_t'] = state_t
-                preds = self.extract_preds(out, batch, out)
-                # p_train.update(preds)
-                loss = self.compute_loss(out, batch, out)
-                for k, v in loss.items():
-                    ln = 'loss_' + k
-                    m_train[ln].append(v.item())
-                    self.summary_writer.add_scalar('train/' + ln, v.item(), train_iter)
-
-                # optimizer backward pass
-                optimizer.zero_grad()
-                sum_loss = sum(loss.values())
-                sum_loss.backward()
-                optimizer.step()
-
-                self.summary_writer.add_scalar('train/loss', sum_loss, train_iter)
-                sum_loss = sum_loss.detach().cpu()
-                total_train_loss.append(float(sum_loss))
-                train_iter += self.args.batch
+                try:
+                    out = dict()
+                    out_action_low, out_action_low_mask, out_attn_scores, out_subgoal, out_progress, state_t = self.forward(dict(feat))
+                    for k in feat:
+                        out[k] = feat[k]
+                    out['out_action_low'] = out_action_low
+                    out['out_action_low_mask'] = out_action_low_mask
+                    out['out_attn_scores'] = out_attn_scores
+                    out['out_subgoal'] = out_subgoal
+                    out['out_progress'] = out_progress
+                    out['state_t'] = state_t
+                    if out['action_low'].shape[0] != out['out_action_low'].shape[0]:
+                        continue
+                    preds = self.extract_preds(out, batch, out)
+                    # p_train.update(preds)
+                    loss = self.compute_loss(out, batch, out)
+                    for k, v in loss.items():
+                        ln = 'loss_' + k
+                        m_train[ln].append(v.item())
+                        self.summary_writer.add_scalar('train/' + ln, v.item(), train_iter)
+    
+                    # optimizer backward pass
+                    optimizer.zero_grad()
+                    sum_loss = sum(loss.values())
+                    print('sum_loss : {}'.format(sum_loss.item()))
+                    sum_loss.backward()
+                    optimizer.step()
+    
+                    self.summary_writer.add_scalar('train/loss', sum_loss, train_iter)
+                    sum_loss = sum_loss.detach().cpu()
+                    total_train_loss.append(float(sum_loss))
+                    train_iter += self.args.batch
+                except Exception as e:
+                    print('ERROR:', e)
 
             ## compute metrics for train (too memory heavy!)
             # m_train = {k: sum(v) / len(v) for k, v in m_train.items()}
@@ -270,25 +288,68 @@ class DataParallel(nn.DataParallel):
             # self.summary_writer.add_scalar('train/total_loss', m_train['total_loss'], train_iter)
 
             # compute metrics for valid_seen
-            p_valid_seen, valid_seen_iter, total_valid_seen_loss, m_valid_seen = self.run_pred(valid_seen, args=args, name='valid_seen', iter=valid_seen_iter)
-            m_valid_seen.update(self.compute_metric(p_valid_seen, valid_seen))
-            m_valid_seen['total_loss'] = float(total_valid_seen_loss)
-            self.summary_writer.add_scalar('valid_seen/total_loss', m_valid_seen['total_loss'], valid_seen_iter)
+            try:
+                p_valid_seen, valid_seen_iter, total_valid_seen_loss, m_valid_seen = self.run_pred(valid_seen, args=args, name='valid_seen', iter=valid_seen_iter)
+                m_valid_seen.update(self.compute_metric(p_valid_seen, valid_seen))
+                m_valid_seen['total_loss'] = float(total_valid_seen_loss)
+                self.summary_writer.add_scalar('valid_seen/total_loss', m_valid_seen['total_loss'], valid_seen_iter)
 
-            # compute metrics for valid_unseen
-            p_valid_unseen, valid_unseen_iter, total_valid_unseen_loss, m_valid_unseen = self.run_pred(valid_unseen, args=args, name='valid_unseen', iter=valid_unseen_iter)
-            m_valid_unseen.update(self.compute_metric(p_valid_unseen, valid_unseen))
-            m_valid_unseen['total_loss'] = float(total_valid_unseen_loss)
-            self.summary_writer.add_scalar('valid_unseen/total_loss', m_valid_unseen['total_loss'], valid_unseen_iter)
+                # compute metrics for valid_unseen
+                p_valid_unseen, valid_unseen_iter, total_valid_unseen_loss, m_valid_unseen = self.run_pred(valid_unseen, args=args, name='valid_unseen', iter=valid_unseen_iter)
+                m_valid_unseen.update(self.compute_metric(p_valid_unseen, valid_unseen))
+                m_valid_unseen['total_loss'] = float(total_valid_unseen_loss)
+                self.summary_writer.add_scalar('valid_unseen/total_loss', m_valid_unseen['total_loss'], valid_unseen_iter)
 
-            stats = {'epoch': epoch,
-                     'valid_seen': m_valid_seen,
-                     'valid_unseen': m_valid_unseen}
+                stats = {'epoch': epoch,
+                         'valid_seen': m_valid_seen,
+                         'valid_unseen': m_valid_unseen}
 
-            # new best valid_seen loss
-            if total_valid_seen_loss < best_loss['valid_seen']:
-                print('\nFound new best valid_seen!! Saving...')
-                fsave = os.path.join(args.dout, 'best_seen.pth')
+                # new best valid_seen loss
+                if total_valid_seen_loss < best_loss['valid_seen']:
+                    print('\nFound new best valid_seen!! Saving...')
+                    fsave = os.path.join(args.dout, 'best_seen.pth')
+                    torch.save({
+                        'metric': stats,
+                        'model': self.state_dict(),
+                        'optim': optimizer.state_dict(),
+                        'args': self.args,
+                        'vocab': self.vocab,
+                    }, fsave)
+                    fbest = os.path.join(args.dout, 'best_seen.json')
+                    with open(fbest, 'wt') as f:
+                        json.dump(stats, f, indent=2)
+
+                    fpred = os.path.join(args.dout, 'valid_seen.debug.preds.json')
+                    with open(fpred, 'wt') as f:
+                        json.dump(self.make_debug(p_valid_seen, valid_seen), f, indent=2)
+                    best_loss['valid_seen'] = total_valid_seen_loss
+
+                # new best valid_unseen loss
+                if total_valid_unseen_loss < best_loss['valid_unseen']:
+                    print('Found new best valid_unseen!! Saving...')
+                    fsave = os.path.join(args.dout, 'best_unseen.pth')
+                    torch.save({
+                        'metric': stats,
+                        'model': self.state_dict(),
+                        'optim': optimizer.state_dict(),
+                        'args': self.args,
+                        'vocab': self.vocab,
+                    }, fsave)
+                    fbest = os.path.join(args.dout, 'best_unseen.json')
+                    with open(fbest, 'wt') as f:
+                        json.dump(stats, f, indent=2)
+
+                    fpred = os.path.join(args.dout, 'valid_unseen.debug.preds.json')
+                    with open(fpred, 'wt') as f:
+                        json.dump(self.make_debug(p_valid_unseen, valid_unseen), f, indent=2)
+
+                    best_loss['valid_unseen'] = total_valid_unseen_loss
+
+                # save the latest checkpoint
+                if args.save_every_epoch:
+                    fsave = os.path.join(args.dout, 'net_epoch_%d.pth' % epoch)
+                else:
+                    fsave = os.path.join(args.dout, 'latest.pth')
                 torch.save({
                     'metric': stats,
                     'model': self.state_dict(),
@@ -296,58 +357,19 @@ class DataParallel(nn.DataParallel):
                     'args': self.args,
                     'vocab': self.vocab,
                 }, fsave)
-                fbest = os.path.join(args.dout, 'best_seen.json')
-                with open(fbest, 'wt') as f:
-                    json.dump(stats, f, indent=2)
 
-                fpred = os.path.join(args.dout, 'valid_seen.debug.preds.json')
-                with open(fpred, 'wt') as f:
-                    json.dump(self.make_debug(p_valid_seen, valid_seen), f, indent=2)
-                best_loss['valid_seen'] = total_valid_seen_loss
+                ## debug action output json for train
+                # fpred = os.path.join(args.dout, 'train.debug.preds.json')
+                # with open(fpred, 'wt') as f:
+                #     json.dump(self.make_debug(p_train, train), f, indent=2)
 
-            # new best valid_unseen loss
-            if total_valid_unseen_loss < best_loss['valid_unseen']:
-                print('Found new best valid_unseen!! Saving...')
-                fsave = os.path.join(args.dout, 'best_unseen.pth')
-                torch.save({
-                    'metric': stats,
-                    'model': self.state_dict(),
-                    'optim': optimizer.state_dict(),
-                    'args': self.args,
-                    'vocab': self.vocab,
-                }, fsave)
-                fbest = os.path.join(args.dout, 'best_unseen.json')
-                with open(fbest, 'wt') as f:
-                    json.dump(stats, f, indent=2)
+                # write stats
+                for split in stats.keys():
+                    if isinstance(stats[split], dict):
+                        for k, v in stats[split].items():
+                            self.summary_writer.add_scalar(split + '/' + k, v, train_iter)
+                pprint.pprint(stats)
 
-                fpred = os.path.join(args.dout, 'valid_unseen.debug.preds.json')
-                with open(fpred, 'wt') as f:
-                    json.dump(self.make_debug(p_valid_unseen, valid_unseen), f, indent=2)
-
-                best_loss['valid_unseen'] = total_valid_unseen_loss
-
-            # save the latest checkpoint
-            if args.save_every_epoch:
-                fsave = os.path.join(args.dout, 'net_epoch_%d.pth' % epoch)
-            else:
-                fsave = os.path.join(args.dout, 'latest.pth')
-            torch.save({
-                'metric': stats,
-                'model': self.state_dict(),
-                'optim': optimizer.state_dict(),
-                'args': self.args,
-                'vocab': self.vocab,
-            }, fsave)
-
-            ## debug action output json for train
-            # fpred = os.path.join(args.dout, 'train.debug.preds.json')
-            # with open(fpred, 'wt') as f:
-            #     json.dump(self.make_debug(p_train, train), f, indent=2)
-
-            # write stats
-            for split in stats.keys():
-                if isinstance(stats[split], dict):
-                    for k, v in stats[split].items():
-                        self.summary_writer.add_scalar(split + '/' + k, v, train_iter)
-            pprint.pprint(stats)
+            except Exception as e:
+                print('EPOCH {} ERROR:'.format(epoch), e)
             sys.flush()
