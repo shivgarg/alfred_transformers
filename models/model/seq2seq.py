@@ -95,7 +95,7 @@ class Module(nn.Module):
         '''
         breaks dataset into batch_size chunks for training
         '''
-        for i in range(0, len(data), batch_size):
+        for i in trange(0, len(data), batch_size, desc="batch progress:"):
             tasks = data[i:i+batch_size]
             batch = [self.load_task_json(task) for task in tasks]
             feat = self.featurize(batch)
@@ -238,6 +238,9 @@ class DataParallel(nn.DataParallel):
         print("Saving to: %s" % self.args.dout)
         best_loss = {'train': 1e10, 'valid_seen': 1e10, 'valid_unseen': 1e10}
         train_iter, valid_seen_iter, valid_unseen_iter = 0, 0, 0
+        count = 0
+        num_batches = max(1,int((len(train)/args.batch)/10))
+        print("10% batch size:", num_batches) 
         for epoch in trange(0, args.epoch, desc='epoch'):
             m_train = collections.defaultdict(list)
             self.train()
@@ -245,6 +248,7 @@ class DataParallel(nn.DataParallel):
             # p_train = {}
             total_train_loss = list()
             random.shuffle(train) # shuffle every epoch
+            
             for batch, feat in self.iterate(train, args.batch):
                 try:
                     out = dict()
@@ -273,13 +277,25 @@ class DataParallel(nn.DataParallel):
                     print('sum_loss : {}'.format(sum_loss.item()))
                     sum_loss.backward()
                     optimizer.step()
-    
+                    if count%num_batches==0:
+                        fsave = os.path.join(args.dout, 'latest.pth')
+                        print("Saved model: {} {}".format(count,fsave))
+                        torch.save({
+                            'model': self.state_dict(),
+                            'optim': optimizer.state_dict(),
+                            'args': self.args,
+                            'vocab': self.vocab,
+                            }, fsave)
+                    
+   
                     self.summary_writer.add_scalar('train/loss', sum_loss, train_iter)
                     sum_loss = sum_loss.detach().cpu()
                     total_train_loss.append(float(sum_loss))
                     train_iter += self.args.batch
                 except Exception as e:
                     print('ERROR:', e)
+                count+=1
+                sys.stdout.flush()
 
             ## compute metrics for train (too memory heavy!)
             # m_train = {k: sum(v) / len(v) for k, v in m_train.items()}
@@ -288,6 +304,7 @@ class DataParallel(nn.DataParallel):
             # self.summary_writer.add_scalar('train/total_loss', m_train['total_loss'], train_iter)
 
             # compute metrics for valid_seen
+            """
             try:
                 p_valid_seen, valid_seen_iter, total_valid_seen_loss, m_valid_seen = self.run_pred(valid_seen, args=args, name='valid_seen', iter=valid_seen_iter)
                 m_valid_seen.update(self.compute_metric(p_valid_seen, valid_seen))
@@ -372,4 +389,5 @@ class DataParallel(nn.DataParallel):
 
             except Exception as e:
                 print('EPOCH {} ERROR:'.format(epoch), e)
-            sys.flush()
+            sys.stdout.flush()
+            """
