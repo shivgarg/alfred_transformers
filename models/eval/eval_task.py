@@ -2,9 +2,11 @@ import os
 import json
 import numpy as np
 from PIL import Image
+import torch
 from datetime import datetime
 from eval import Eval
 from env.thor_env import ThorEnv
+from torchvision import transforms
 
 class EvalTask(Eval):
     '''
@@ -59,14 +61,18 @@ class EvalTask(Eval):
         fails = 0
         t = 0
         reward = 0
+        device = torch.device('cuda') if args.gpu else torch.device('cpu')
         while not done:
             # break if max_steps reached
             if t >= args.max_steps:
                 break
 
             # extract visual features
+            tfms = transforms.Compose([transforms.Resize(224), transforms.ToTensor(), transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),])
             curr_image = Image.fromarray(np.uint8(env.last_event.frame))
-            feat['frames'] = resnet.featurize([curr_image], batch=1).unsqueeze(0)
+            curr_image = tfms(curr_image)
+            #feat['frames'] = resnet.featurize([curr_image], batch=1).unsqueeze(0)
+            feat['frames'] = curr_image.unsqueeze(0).unsqueeze(0).to(device)
 
             # forward model
             m_out = model.step(feat)

@@ -28,7 +28,7 @@ class Eval(object):
         # load model
         print("Loading: ", self.args.model_path)
         M = import_module(self.args.model)
-        self.model, optimizer = M.Module.load(self.args.model_path)
+        self.model, optimizer = M.Module.load_parallel(self.args.model_path)
         self.model.share_memory()
         self.model.eval()
         self.model.test_mode = True
