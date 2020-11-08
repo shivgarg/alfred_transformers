@@ -138,6 +138,23 @@ class Module(nn.Module):
         return model, optimizer
 
     @classmethod
+    def load_parallel(cls, fsave):
+        '''
+        load pth model from disk
+        '''
+        save = torch.load(fsave)
+        model = cls(save['args'], save['vocab'])
+        from collections import OrderedDict
+        new_state_dict = OrderedDict()
+        for k, v in save['model'].items():
+            name = k[7:] # remove `module.`
+            new_state_dict[name] = v
+        model.load_state_dict(new_state_dict)
+        optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+        optimizer.load_state_dict(save['optim'])
+        return model, optimizer
+
+    @classmethod
     def has_interaction(cls, action):
         '''
         check if low-level action is interactive

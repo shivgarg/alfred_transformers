@@ -136,10 +136,10 @@ class Module(Base):
             #########
             # outputs
             #########
-            if self.args.subgoal_aux_loss_wt > 0:
+            if self.args.subgoal_aux_loss_wt > 0 and not self.test_mode:
                 feat['subgoals_completed'][-1] = feat['subgoals_completed'][-1][:episode_len]
     
-            if self.args.pm_aux_loss_wt > 0:
+            if self.args.pm_aux_loss_wt > 0 and not self.test_mode:
                 feat['subgoal_progress'][-1] = feat['subgoal_progress'][-1][:episode_len]
  
             if not self.test_mode:
@@ -180,7 +180,6 @@ class Module(Base):
                 seqs = [torch.tensor(vv, device=device, dtype=torch.float if ('frames' in k) else torch.long) for vv in v]
                 pad_seq = pad_sequence(seqs, batch_first=True, padding_value=self.pad)
                 feat[k] = pad_seq
-
         return feat
 
 
