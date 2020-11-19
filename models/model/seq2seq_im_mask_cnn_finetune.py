@@ -114,35 +114,39 @@ class Module(Base):
                 for img in imgs:
                     im.append(tfms(Image.open("{}/{}".format(path,img))))
                 im = torch.stack(im)
-                num_low_actions = len(ex['plan']['low_actions'])
+                num_low_actions = len(ex['plan']['low_actions']) + 1
                 num_feat_frames = im.shape[0]
 
                 if num_low_actions != num_feat_frames:
-                    keep = [None] * len(ex['plan']['low_actions'])
+                    keep = [None] * num_low_actions
                     for i, d in enumerate(ex['images']):
                         # only add frames linked with low-level actions (i.e. skip filler frames like smooth rotations and dish washing)
                         if keep[d['low_idx']] is None:
                             keep[d['low_idx']] = im[i]
-                    keep.append(keep[-1])  # stop frame
+                    keep[-1]= im[-1]  # stop frame
                     episode_len = min(self.max_episode_len, len(keep))
                     keep = keep[:episode_len]
-                    feat['frames'].append(torch.stack(keep, dim=0))
+                    keep = torch.stack(keep, dim=0)
+                    feat['frames'].append(keep)
                 else:
                     episode_len = min(self.max_episode_len, len(im))
                     im = im[:episode_len]
-                    feat['frames'].append(torch.cat([im, im[-1].unsqueeze(0)], dim=0))  # add stop frame
+                    feat['frames'].append(im)            
+                    #feat['frames'].append(torch.cat([im, im[-1].unsqueeze(0)], dim=0))  # add stop frame
+                print(feat['frames'][-1].shape)
 
             #########
             # outputs
             #########
-            if self.args.subgoal_aux_loss_wt > 0:
-                feat['subgoals_completed'][-1] = feat['subgoals_completed'][-1][:episode_len]
-    
-            if self.args.pm_aux_loss_wt > 0:
-                feat['subgoal_progress'][-1] = feat['subgoal_progress'][-1][:episode_len]
- 
             if not self.test_mode:
-                # low-level action
+ 
+                if self.args.subgoal_aux_loss_wt > 0:
+                    feat['subgoals_completed'][-1] = feat['subgoals_completed'][-1][:episode_len]
+    
+                if self.args.pm_aux_loss_wt > 0:
+                    feat['subgoal_progress'][-1] = feat['subgoal_progress'][-1][:episode_len]
+ 
+               # low-level action
                 feat['action_low'].append([a['action'] for a in ex['num']['action_low']][:episode_len])
 
                 # low-level action mask
@@ -177,6 +181,7 @@ class Module(Base):
                 seqs = [torch.tensor(vv, device=device, dtype=torch.float if ('frames' in k) else torch.long) for vv in v]
                 pad_seq = pad_sequence(seqs, batch_first=True, padding_value=self.pad)
                 feat[k] = pad_seq
+                print(feat[k].shape,k)
 
         return feat
 
