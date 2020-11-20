@@ -3,6 +3,7 @@ import random
 import json
 import torch
 import pprint
+import sys
 import collections
 import numpy as np
 from torch import nn
@@ -68,6 +69,7 @@ class Module(nn.Module):
 
         # initialize summary writer for tensorboardX
         self.summary_writer = SummaryWriter(log_dir=args.dout)
+        loss_writer = open(os.path.join(args.dout, 'accum_loss'), 'w')
 
         # dump config
         fconfig = os.path.join(args.dout, 'config.json')
@@ -88,7 +90,10 @@ class Module(nn.Module):
             # p_train = {}
             total_train_loss = list()
             random.shuffle(train) # shuffle every epoch
-            for batch, feat in self.iterate(train, args.batch):
+            optimizer.zero_grad()
+            accum_loss = 0.0
+            for _i, batch_feat in enumerate(self.iterate(train, args.batch)):
+                batch, feat = batch_feat
                 out = self.forward(feat)
                 preds = self.extract_preds(out, batch, feat)
                 # p_train.update(preds)
@@ -99,16 +104,22 @@ class Module(nn.Module):
                     self.summary_writer.add_scalar('train/' + ln, v.item(), train_iter)
 
                 # optimizer backward pass
-                optimizer.zero_grad()
                 sum_loss = sum(loss.values())
+                sum_loss /= args.accumulation_steps
                 sum_loss.backward()
-                optimizer.step()
+                accum_loss += sum_loss
+                if (_i+1)%args.accumulation_steps == 0:
+                    print('accum_loss : {}'.format(accum_loss))
+                    loss_writer.write('{}\t{}\n'.format(_i, accum_loss))
+                    optimizer.step()
+                    optimizer.zero_grad()
+                    accum_loss = 0.0
 
                 self.summary_writer.add_scalar('train/loss', sum_loss, train_iter)
                 sum_loss = sum_loss.detach().cpu()
                 total_train_loss.append(float(sum_loss))
                 train_iter += self.args.batch
-
+                sys.stdout.flush()
             ## compute metrics for train (too memory heavy!)
             # m_train = {k: sum(v) / len(v) for k, v in m_train.items()}
             # m_train.update(self.compute_metric(p_train, train))
