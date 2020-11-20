@@ -61,8 +61,9 @@ if __name__ == '__main__':
     # debugging
     parser.add_argument('--fast_epoch', help='fast epoch during debugging', action='store_true')
     parser.add_argument('--dataset_fraction', help='use fraction of the dataset for debugging (0 indicates full size)', default=0, type=int)
-    
+    parser.add_argument('--accum_steps', help='gradient accumulation steps', default=2, type=int) 
     # args and init
+    parser.add_argument('--ckpt_ratio', help = 'ckpt epoch ratio', default=0.05, type=float)
     args = parser.parse_args()
     args.dout = args.dout.format(**vars(args))
     torch.manual_seed(args.seed)

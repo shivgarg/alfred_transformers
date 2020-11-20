@@ -133,7 +133,6 @@ class Module(Base):
                     im = im[:episode_len]
                     feat['frames'].append(im)            
                     #feat['frames'].append(torch.cat([im, im[-1].unsqueeze(0)], dim=0))  # add stop frame
-                print(feat['frames'][-1].shape)
 
             #########
             # outputs
@@ -181,8 +180,6 @@ class Module(Base):
                 seqs = [torch.tensor(vv, device=device, dtype=torch.float if ('frames' in k) else torch.long) for vv in v]
                 pad_seq = pad_sequence(seqs, batch_first=True, padding_value=self.pad)
                 feat[k] = pad_seq
-                print(feat[k].shape,k)
-
         return feat
 
 
@@ -209,7 +206,8 @@ class Module(Base):
     def forward(self, feat, max_decode=300):
         cont_lang, enc_lang = self.encode_lang(feat)
         state_0 = cont_lang, torch.zeros_like(cont_lang)
-        frames = self.vis_dropout(feat['frames'])
+        #frames = self.vis_dropout(feat['frames'])
+        frames = feat['frames']
         res = self.dec(enc_lang, frames, max_decode=self.max_episode_len, gold=feat['action_low'], state_0=state_0)
         feat.update(res)
         return feat

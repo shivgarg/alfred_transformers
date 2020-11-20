@@ -8,6 +8,9 @@ import numpy as np
 from torch import nn
 from tensorboardX import SummaryWriter
 from tqdm import trange
+import sys
+from torch.utils.data import Dataset, DataLoader
+import math
 
 class Module(nn.Module):
 
@@ -51,7 +54,8 @@ class Module(nn.Module):
         train = splits['train']
         valid_seen = splits['valid_seen']
         valid_unseen = splits['valid_unseen']
-
+        #self.emb_word = self.emb_word.to(torch.device('cpu'))
+        #self.emb_action_low = self.emb_action_low.to('cpu')
         # debugging: chose a small fraction of the dataset
         if self.args.dataset_fraction > 0:
             small_train_size = int(self.args.dataset_fraction * 0.7)
@@ -81,14 +85,20 @@ class Module(nn.Module):
         print("Saving to: %s" % self.args.dout)
         best_loss = {'train': 1e10, 'valid_seen': 1e10, 'valid_unseen': 1e10}
         train_iter, valid_seen_iter, valid_unseen_iter = 0, 0, 0
+        count = 0
+        optimizer.zero_grad()
+        ckpt_steps = max(1,math.floor(args.ckpt_ratio*len(train)/args.batch))
+        #train_dataset = LoadDataset(args.batch, self, train)
+        #train_dataloader = DataLoader(train_dataset, batch_size=1,shuffle=True, num_workers=2) 
         for epoch in trange(0, args.epoch, desc='epoch'):
+            sys.stdout.flush()
             m_train = collections.defaultdict(list)
             self.train()
             self.adjust_lr(optimizer, args.lr, epoch, decay_epoch=args.decay_epoch)
             # p_train = {}
             total_train_loss = list()
-            random.shuffle(train) # shuffle every epoch
-            for batch, feat in self.iterate(train, args.batch):
+            random.shuffle(train)
+            for batch, feat in self.iterate(train,args.batch):
                 out = self.forward(feat)
                 preds = self.extract_preds(out, batch, feat)
                 # p_train.update(preds)
@@ -99,11 +109,24 @@ class Module(nn.Module):
                     self.summary_writer.add_scalar('train/' + ln, v.item(), train_iter)
 
                 # optimizer backward pass
-                optimizer.zero_grad()
+                #optimizer.zero_grad()
                 sum_loss = sum(loss.values())
+                print(sum_loss.item())
                 sum_loss.backward()
-                optimizer.step()
+                count += 1
+                if count % ckpt_steps == 0:
+                    fsave = os.path.join(args.dout, 'latest.pth')
+                    torch.save({
+                           'model': self.state_dict(),
+                           'optim': optimizer.state_dict(),
+                           'args': self.args,
+                           'vocab': self.vocab,
+                    }, fsave)
 
+
+                if count % args.accum_steps == 0:
+                    optimizer.step()
+                    optimizer.zero_grad()
                 self.summary_writer.add_scalar('train/loss', sum_loss, train_iter)
                 sum_loss = sum_loss.detach().cpu()
                 total_train_loss.append(float(sum_loss))
@@ -116,6 +139,7 @@ class Module(nn.Module):
             # self.summary_writer.add_scalar('train/total_loss', m_train['total_loss'], train_iter)
 
             # compute metrics for valid_seen
+            """
             p_valid_seen, valid_seen_iter, total_valid_seen_loss, m_valid_seen = self.run_pred(valid_seen, args=args, name='valid_seen', iter=valid_seen_iter)
             m_valid_seen.update(self.compute_metric(p_valid_seen, valid_seen))
             m_valid_seen['total_loss'] = float(total_valid_seen_loss)
@@ -196,6 +220,7 @@ class Module(nn.Module):
                     for k, v in stats[split].items():
                         self.summary_writer.add_scalar(split + '/' + k, v, train_iter)
             pprint.pprint(stats)
+            """
 
     def run_pred(self, dev, args=None, name='dev', iter=0):
         '''
@@ -276,6 +301,7 @@ class Module(nn.Module):
         '''
         return os.path.join(self.args.data, ex['split'], *(ex['root'].split('/')[-2:]))
 
+    
     def iterate(self, data, batch_size):
         '''
         breaks dataset into batch_size chunks for training
@@ -285,7 +311,7 @@ class Module(nn.Module):
             batch = [self.load_task_json(task) for task in tasks]
             feat = self.featurize(batch)
             yield batch, feat
-
+    
     def zero_input(self, x, keep_end_token=True):
         '''
         pad input with zeros (used for ablations)
@@ -332,3 +358,24 @@ class Module(nn.Module):
             return False
         else:
             return True
+
+
+class LoadDataset(Dataset):
+    def __init__(self, batch_size, model,data):
+        self.batch_size = batch_size
+        self.model = model
+        self.data = data
+
+    def __len__(self):
+        #return len(self.data)
+        return math.ceil(len(self.data)/self.batch_size)
+
+    def __getitem__(self,idx):
+        idx*=self.batch_size
+        tasks = self.data[idx:idx+self.batch_size]
+        batch = [self.model.load_task_json(task) for task in tasks]
+        feat = self.model.featurize(batch)
+        print(feat.keys())
+        return (idx,feat)
+         
+ 
