@@ -32,17 +32,18 @@ class DotAttn(nn.Module):
         score = F.softmax(raw_score, dim=1)
         return score
 
-class Context2Query(nn.Module):
+class BiDAFModule(nn.Module):
     def __init__(self):
         super().__init__()
     
     def forward(self, context, query):
         query = query.permute([0,2,1])
-        attn_scores = F.softmax(torch.bmm(context, query),dim=1)
+        attn_scores = torch.bmm(context, query)
+        q2c = F.softmax(torch.max(attn_scores,2,keepdim=True).values,dim=1).permute([0,2,1]).bmm(context).squeeze()
+        c2q = F.softmax(attn_scores,2)
         query = query.permute([0,2,1])
-        output = torch.bmm(attn_scores,query)
-        return output
-
+        c2q = torch.bmm(c2q,query)
+        return c2q, q2c
 
 
 class ResnetVisualEncoder(nn.Module):
@@ -466,21 +467,21 @@ class ConvFrameMaskDecoderProgressMonitorBiDAF(nn.Module):
         self.pframe = pframe
         self.dhid = dhid
         self.vis_encoder = BiDAFCNN(bidaf_dim)
-        self.cell = nn.LSTMCell(bidaf_dim+bidaf_dim+demb, bidaf_dim)
+        self.cell = nn.LSTMCell(bidaf_dim+bidaf_dim+bidaf_dim+demb, bidaf_dim)
         self.attn = DotAttn()
         self.input_dropout = nn.Dropout(input_dropout)
         self.attn_dropout = nn.Dropout(attn_dropout)
         self.hstate_dropout = nn.Dropout(hstate_dropout)
         self.actor_dropout = nn.Dropout(actor_dropout)
         self.go = nn.Parameter(torch.Tensor(demb))
-        self.actor = nn.Linear(bidaf_dim+bidaf_dim+bidaf_dim+demb, demb)
-        self.mask_dec = MaskDecoder(dhid=bidaf_dim+bidaf_dim+bidaf_dim+demb, pframe=self.pframe)
+        self.actor = nn.Linear(bidaf_dim+bidaf_dim+bidaf_dim+bidaf_dim+demb, demb)
+        self.mask_dec = MaskDecoder(dhid=bidaf_dim+bidaf_dim+bidaf_dim+bidaf_dim+demb, pframe=self.pframe)
         self.teacher_forcing = teacher_forcing
         self.h_tm1_fc = nn.Linear(bidaf_dim, bidaf_dim)
-        self.c2q = Context2Query()
+        self.bidaf_mod = BiDAFModule()
         self.c2q_selfattn = SelfAttn(bidaf_dim)
-        self.subgoal = nn.Linear(bidaf_dim+bidaf_dim+bidaf_dim+demb, 1)
-        self.progress = nn.Linear(bidaf_dim+bidaf_dim+bidaf_dim+demb, 1)
+        self.subgoal = nn.Linear(bidaf_dim+bidaf_dim+bidaf_dim+bidaf_dim+demb, 1)
+        self.progress = nn.Linear(bidaf_dim+bidaf_dim+bidaf_dim+bidaf_dim+demb, 1)
 
         nn.init.uniform_(self.go, -0.1, 0.1)
 
@@ -495,9 +496,10 @@ class ConvFrameMaskDecoderProgressMonitorBiDAF(nn.Module):
         weighted_lang_t, lang_attn_t = self.attn(self.attn_dropout(lang_feat_t), self.h_tm1_fc(h_tm1))
         # concat visual feats, weight lang, and previous action embedding
         #nprint(weighted_lang_t.shape, lang_feat_t.shape, vis_feat_t.shape)
-        c2q =  self.c2q_selfattn(self.c2q(vis_feat_t,lang_feat_t))
+        c2q , q2c =  self.bidaf_mod(vis_feat_t,lang_feat_t)
+        c2q = self.c2q_selfattn(c2q)
         #print(c2q.shape)
-        inp_t = torch.cat([c2q, weighted_lang_t, e_t], dim=1)
+        inp_t = torch.cat([c2q, weighted_lang_t, e_t, q2c], dim=1)
         inp_t = self.input_dropout(inp_t)
 
         # update hidden state
