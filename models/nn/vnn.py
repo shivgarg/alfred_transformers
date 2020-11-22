@@ -32,6 +32,19 @@ class DotAttn(nn.Module):
         score = F.softmax(raw_score, dim=1)
         return score
 
+class BiDAFModule(nn.Module):
+    def __init__(self):
+        super().__init__()
+    
+    def forward(self, context, query):
+        query = query.permute([0,2,1])
+        attn_scores = torch.bmm(context, query)
+        q2c = F.softmax(torch.max(attn_scores,2,keepdim=True).values,dim=1).permute([0,2,1]).bmm(context).squeeze()
+        c2q = F.softmax(attn_scores,2)
+        query = query.permute([0,2,1])
+        c2q = torch.bmm(c2q,query)
+        return c2q, q2c
+
 
 class ResnetVisualEncoder(nn.Module):
     '''
@@ -131,7 +144,6 @@ class ConvFrameMaskDecoder(nn.Module):
     def step(self, enc, frame, e_t, state_tm1):
         # previous decoder hidden state
         h_tm1 = state_tm1[0]
-
         # encode vision and lang feat
         vis_feat_t = self.vis_encoder(frame)
         lang_feat_t = enc # language is encoded once at the start
@@ -362,6 +374,132 @@ class ConvFrameMaskDecoderProgressMonitorFinetune(nn.Module):
 
         # concat visual feats, weight lang, and previous action embedding
         inp_t = torch.cat([vis_feat_t, weighted_lang_t, e_t], dim=1)
+        inp_t = self.input_dropout(inp_t)
+
+        # update hidden state
+        state_t = self.cell(inp_t, state_tm1)
+        state_t = [self.hstate_dropout(x) for x in state_t]
+        h_t, c_t = state_t[0], state_t[1]
+
+        # decode action and mask
+        cont_t = torch.cat([h_t, inp_t], dim=1)
+        action_emb_t = self.actor(self.actor_dropout(cont_t))
+        action_t = action_emb_t.mm(self.emb.weight.t())
+        mask_t = self.mask_dec(cont_t)
+
+        # predict subgoals completed and task progress
+        subgoal_t = F.sigmoid(self.subgoal(cont_t))
+        progress_t = F.sigmoid(self.progress(cont_t))
+
+        return action_t, mask_t, state_t, lang_attn_t, subgoal_t, progress_t
+
+    def forward(self, enc, frames, gold=None, max_decode=150, state_0=None):
+        max_t = min(max_decode,gold.size(1)) if self.training else min(max_decode, frames.shape[1])
+        batch = enc.size(0)
+        e_t = self.go.repeat(batch, 1)
+        state_t = state_0
+        actions = []
+        masks = []
+        attn_scores = []
+        subgoals = []
+        progresses = []
+        for t in range(max_t):
+            action_t, mask_t, state_t, attn_score_t, subgoal_t, progress_t = self.step(enc, frames[:, t], e_t, state_t)
+            masks.append(mask_t)
+            actions.append(action_t)
+            attn_scores.append(attn_score_t)
+            subgoals.append(subgoal_t)
+            progresses.append(progress_t)
+
+            # find next emb
+            if self.teacher_forcing and self.training:
+                w_t = gold[:, t]
+            else:
+                w_t = action_t.max(1)[1]
+            e_t = self.emb(w_t)
+
+        results = {
+            'out_action_low': torch.stack(actions, dim=1),
+            'out_action_low_mask': torch.stack(masks, dim=1),
+            'out_attn_scores': torch.stack(attn_scores, dim=1),
+            'out_subgoal': torch.stack(subgoals, dim=1),
+            'out_progress': torch.stack(progresses, dim=1),
+            'state_t': state_t
+        }
+        return results
+
+class BiDAFCNN(nn.Module):
+    '''
+    visual encoder
+    '''
+
+    def __init__(self, bidaf_dim):
+        super(BiDAFCNN, self).__init__()
+        self.flattened_size = 24*7*7
+        self.conv1 = nn.Conv2d(64, 24, kernel_size=3, stride=1, padding=1)
+        self.fc = nn.Linear(self.flattened_size, bidaf_dim)
+        self.bn1 = nn.BatchNorm2d(24)
+
+    def forward(self, x):
+        batch = x.shape[0]
+        num_objs = x.shape[1]
+        x = torch.reshape(x, (-1,64,7,7))
+        x = self.conv1(x)
+        x = F.relu(self.bn1(x))
+
+        x = torch.reshape(x,[batch, num_objs,-1])
+        x = F.relu(self.fc(x))
+        return x
+
+
+class ConvFrameMaskDecoderProgressMonitorBiDAF(nn.Module):
+    '''
+    action decoder with subgoal and progress monitoring
+    '''
+
+    def __init__(self, emb, dframe, dhid, pframe=300,
+                 attn_dropout=0., hstate_dropout=0., actor_dropout=0., input_dropout=0.,
+                 teacher_forcing=False, bidaf_dim = 512):
+        super().__init__()
+        demb = emb.weight.size(1)
+
+        self.emb = emb
+        self.pframe = pframe
+        self.dhid = dhid
+        self.vis_encoder = BiDAFCNN(bidaf_dim)
+        self.cell = nn.LSTMCell(bidaf_dim+bidaf_dim+bidaf_dim+demb, bidaf_dim)
+        self.attn = DotAttn()
+        self.input_dropout = nn.Dropout(input_dropout)
+        self.attn_dropout = nn.Dropout(attn_dropout)
+        self.hstate_dropout = nn.Dropout(hstate_dropout)
+        self.actor_dropout = nn.Dropout(actor_dropout)
+        self.go = nn.Parameter(torch.Tensor(demb))
+        self.actor = nn.Linear(bidaf_dim+bidaf_dim+bidaf_dim+bidaf_dim+demb, demb)
+        self.mask_dec = MaskDecoder(dhid=bidaf_dim+bidaf_dim+bidaf_dim+bidaf_dim+demb, pframe=self.pframe)
+        self.teacher_forcing = teacher_forcing
+        self.h_tm1_fc = nn.Linear(bidaf_dim, bidaf_dim)
+        self.bidaf_mod = BiDAFModule()
+        self.c2q_selfattn = SelfAttn(bidaf_dim)
+        self.subgoal = nn.Linear(bidaf_dim+bidaf_dim+bidaf_dim+bidaf_dim+demb, 1)
+        self.progress = nn.Linear(bidaf_dim+bidaf_dim+bidaf_dim+bidaf_dim+demb, 1)
+
+        nn.init.uniform_(self.go, -0.1, 0.1)
+
+    def step(self, enc, frame, e_t, state_tm1):
+        # previous decoder hidden state
+        h_tm1 = state_tm1[0]
+
+        # encode vision and lang feat
+        vis_feat_t = self.vis_encoder(frame)
+        lang_feat_t = enc # language is encoded once at the start
+        # attend over language
+        weighted_lang_t, lang_attn_t = self.attn(self.attn_dropout(lang_feat_t), self.h_tm1_fc(h_tm1))
+        # concat visual feats, weight lang, and previous action embedding
+        #nprint(weighted_lang_t.shape, lang_feat_t.shape, vis_feat_t.shape)
+        c2q , q2c =  self.bidaf_mod(vis_feat_t,lang_feat_t)
+        c2q = self.c2q_selfattn(c2q)
+        #print(c2q.shape)
+        inp_t = torch.cat([c2q, weighted_lang_t, e_t, q2c], dim=1)
         inp_t = self.input_dropout(inp_t)
 
         # update hidden state
