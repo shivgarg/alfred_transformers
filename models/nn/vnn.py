@@ -435,10 +435,12 @@ class BiDAFCNN(nn.Module):
 
     def __init__(self, bidaf_dim):
         super(BiDAFCNN, self).__init__()
-        self.flattened_size = 24*7*7
-        self.conv1 = nn.Conv2d(64, 24, kernel_size=3, stride=1, padding=1)
+        self.flattened_size = 256*7*7
+        self.conv1 = nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1)
+        self.conv2 = nn.Conv2d(128,256, kernel_size=3, stride=1, padding=1)
         self.fc = nn.Linear(self.flattened_size, bidaf_dim)
-        self.bn1 = nn.BatchNorm2d(24)
+        self.bn1 = nn.BatchNorm2d(128)
+        self.bn2 = nn.BatchNorm2d(256)
 
     def forward(self, x):
         batch = x.shape[0]
@@ -446,7 +448,7 @@ class BiDAFCNN(nn.Module):
         x = torch.reshape(x, (-1,64,7,7))
         x = self.conv1(x)
         x = F.relu(self.bn1(x))
-
+        x = F.relu(self.bn2(self.conv2(x)))
         x = torch.reshape(x,[batch, num_objs,-1])
         x = F.relu(self.fc(x))
         return x

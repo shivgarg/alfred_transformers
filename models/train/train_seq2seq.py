@@ -64,7 +64,7 @@ if __name__ == '__main__':
     parser.add_argument('--accum_steps', help='gradient accumulation steps', default=2, type=int) 
     # args and init
     parser.add_argument('--ckpt_ratio', help = 'ckpt epoch ratio', default=0.05, type=float)
-    parser.add_argument('--bidaf_dim', help = 'bidaf common embedding dim length', default=512, type=int)
+    parser.add_argument('--bidaf_dim', help = 'bidaf common embedding dim length', default=1536, type=int)
     args = parser.parse_args()
     args.dout = args.dout.format(**vars(args))
     torch.manual_seed(args.seed)
