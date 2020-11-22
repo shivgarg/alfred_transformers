@@ -112,7 +112,8 @@ class Module(Base):
                 tfms = transforms.Compose([transforms.Resize(224), transforms.ToTensor(),
                        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),])
                 for img in imgs:
-                    im.append(tfms(Image.open("{}/{}".format(path,img))))
+                    if 'jpg' in img:
+                        im.append(tfms(Image.open("{}/{}".format(path,img))))
                 im = torch.stack(im)
                 num_low_actions = len(ex['plan']['low_actions']) + 1
                 num_feat_frames = im.shape[0]
