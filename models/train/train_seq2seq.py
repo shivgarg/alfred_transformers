@@ -65,6 +65,7 @@ if __name__ == '__main__':
     # args and init
     parser.add_argument('--ckpt_ratio', help = 'ckpt epoch ratio', default=0.05, type=float)
     parser.add_argument('--bidaf_dim', help = 'bidaf common embedding dim length', default=1536, type=int)
+    parser.add_argument('--focal_alpha', help = 'alpha val for focal loss', default=2.0, type=float)
     args = parser.parse_args()
     args.dout = args.dout.format(**vars(args))
     torch.manual_seed(args.seed)
