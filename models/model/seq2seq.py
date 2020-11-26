@@ -64,8 +64,10 @@ class Module(nn.Module):
         # debugging: use to check if training loop works without waiting for full epoch
         if self.args.fast_epoch:
             train = train[:16]
-            valid_seen = valid_seen[:16]
-            valid_unseen = valid_unseen[:16]
+            valid_seen = train[:16]
+            valid_unseen = train[:16]
+            #valid_seen = valid_seen[:16]
+            #valid_unseen = valid_unseen[:16]
 
         # initialize summary writer for tensorboardX
         self.summary_writer = SummaryWriter(log_dir=args.dout)

@@ -153,7 +153,6 @@ class ConvFrameMaskDecoder(nn.Module):
         action_emb_t = self.actor(self.actor_dropout(cont_t))
         action_t = action_emb_t.mm(self.emb.weight.t())
         mask_t = self.mask_dec(cont_t)
-
         return action_t, mask_t, state_t, lang_attn_t
 
     def forward(self, enc, frames, gold=None, max_decode=150, state_0=None):
@@ -190,46 +189,46 @@ class ConvFrameMaskDecoderProgressMonitor(nn.Module):
     action decoder with subgoal and progress monitoring
     '''
 
-    def __init__(self, emb, dframe, dhid, pframe=300,
+    def __init__(self, emb, dframe, dhid, demb_goal,pframe=300,
                  attn_dropout=0., hstate_dropout=0., actor_dropout=0., input_dropout=0.,
                  teacher_forcing=False):
         super().__init__()
         demb = emb.weight.size(1)
-
+        self.demb_goal = demb_goal
         self.emb = emb
         self.pframe = pframe
         self.dhid = dhid
         self.vis_encoder = ResnetVisualEncoder(dframe=dframe)
-        self.cell = nn.LSTMCell(dhid+dframe+demb, dhid)
+        self.cell = nn.LSTMCell(dhid+dframe+demb+demb_goal, dhid)
         self.attn = DotAttn()
         self.input_dropout = nn.Dropout(input_dropout)
         self.attn_dropout = nn.Dropout(attn_dropout)
         self.hstate_dropout = nn.Dropout(hstate_dropout)
         self.actor_dropout = nn.Dropout(actor_dropout)
         self.go = nn.Parameter(torch.Tensor(demb))
-        self.actor = nn.Linear(dhid+dhid+dframe+demb, demb)
-        self.mask_dec = MaskDecoder(dhid=dhid+dhid+dframe+demb, pframe=self.pframe)
+        self.actor = nn.Linear(dhid+dhid+dframe+demb+demb_goal, demb)
+        self.mask_dec = MaskDecoder(dhid=dhid+dhid+dframe+demb+demb_goal, pframe=self.pframe)
         self.teacher_forcing = teacher_forcing
         self.h_tm1_fc = nn.Linear(dhid, dhid)
 
-        self.subgoal = nn.Linear(dhid+dhid+dframe+demb, 1)
-        self.progress = nn.Linear(dhid+dhid+dframe+demb, 1)
+        self.subgoal = nn.Linear(dhid+dhid+dframe+demb+demb_goal, 1)
+        self.progress = nn.Linear(dhid+dhid+dframe+demb+demb_goal, 1)
 
         nn.init.uniform_(self.go, -0.1, 0.1)
 
-    def step(self, enc, frame, e_t, state_tm1):
+    def step(self, enc_instr, enc_goal, frame, e_t, state_tm1):
         # previous decoder hidden state
         h_tm1 = state_tm1[0]
 
         # encode vision and lang feat
         vis_feat_t = self.vis_encoder(frame)
-        lang_feat_t = enc # language is encoded once at the start
+        lang_feat_t = enc_instr # language is encoded once at the start
 
         # attend over language
         weighted_lang_t, lang_attn_t = self.attn(self.attn_dropout(lang_feat_t), self.h_tm1_fc(h_tm1))
 
         # concat visual feats, weight lang, and previous action embedding
-        inp_t = torch.cat([vis_feat_t, weighted_lang_t, e_t], dim=1)
+        inp_t = torch.cat([vis_feat_t, weighted_lang_t, enc_goal, e_t], dim=1)
         inp_t = self.input_dropout(inp_t)
 
         # update hidden state
@@ -246,12 +245,11 @@ class ConvFrameMaskDecoderProgressMonitor(nn.Module):
         # predict subgoals completed and task progress
         subgoal_t = F.sigmoid(self.subgoal(cont_t))
         progress_t = F.sigmoid(self.progress(cont_t))
-
         return action_t, mask_t, state_t, lang_attn_t, subgoal_t, progress_t
 
-    def forward(self, enc, frames, gold=None, max_decode=150, state_0=None):
+    def forward(self, enc_instr, enc_goal, frames, gold=None, max_decode=150, state_0=None):
         max_t = gold.size(1) if self.training else min(max_decode, frames.shape[1])
-        batch = enc.size(0)
+        batch = enc_instr.size(0)
         e_t = self.go.repeat(batch, 1)
         state_t = state_0
 
@@ -261,7 +259,7 @@ class ConvFrameMaskDecoderProgressMonitor(nn.Module):
         subgoals = []
         progresses = []
         for t in range(max_t):
-            action_t, mask_t, state_t, attn_score_t, subgoal_t, progress_t = self.step(enc, frames[:, t], e_t, state_t)
+            action_t, mask_t, state_t, attn_score_t, subgoal_t, progress_t = self.step(enc_instr, enc_goal, frames[:, t], e_t, state_t)
             masks.append(mask_t)
             actions.append(action_t)
             attn_scores.append(attn_score_t)
