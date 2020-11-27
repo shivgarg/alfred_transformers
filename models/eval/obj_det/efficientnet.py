@@ -2,7 +2,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from models.utils import (
+from obj_det.utils import (
     round_filters,
     round_repeats,
     drop_connect,

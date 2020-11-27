@@ -6,7 +6,7 @@ import torch
 import torch.multiprocessing as mp
 from data.preprocess import Dataset
 from importlib import import_module
-from models import EfficientDet
+from obj_det import EfficientDet
 from torchvision import transforms
 from utils import EFFICIENTDET
 from datasets import get_augumentation, VOC_CLASSES
