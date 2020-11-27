@@ -12,7 +12,7 @@ class EvalTask(Eval):
     '''
 
     @classmethod
-    def run(cls, model, resnet, task_queue, args, lock, successes, failures, results):
+    def run(cls, model, object_extractor, task_queue, args, lock, successes, failures, results):
         '''
         evaluation loop
         '''
@@ -30,7 +30,7 @@ class EvalTask(Eval):
                 r_idx = task['repeat_idx']
                 print("Evaluating: %s" % (traj['root']))
                 print("No. of trajectories left: %d" % (task_queue.qsize()))
-                cls.evaluate(env, model, r_idx, resnet, traj, args, lock, successes, failures, results)
+                cls.evaluate(env, model, r_idx, object_extractor, traj, args, lock, successes, failures, results)
             except Exception as e:
                 import traceback
                 traceback.print_exc()
@@ -41,7 +41,7 @@ class EvalTask(Eval):
 
 
     @classmethod
-    def evaluate(cls, env, model, r_idx, resnet, traj_data, args, lock, successes, failures, results):
+    def evaluate(cls, env, model, r_idx, object_detector, traj_data, args, lock, successes, failures, results):
         # reset model
         model.reset()
 
@@ -66,7 +66,36 @@ class EvalTask(Eval):
 
             # extract visual features
             curr_image = Image.fromarray(np.uint8(env.last_event.frame))
-            feat['frames'] = resnet.featurize([curr_image], batch=1).unsqueeze(0)
+            curr_image = self.tfms(curr_image).unsqueeze(0)
+            scores, classification, transformed_anchors, features = object_detector(curr_image)
+            features = transforms.Resize((300,300))(features).squeeze()
+            bboxes = list()
+            labels = list()
+            bbox_scores = list()
+            colors = list()
+            values = []
+            for j in range(scores.shape[0]):
+                bbox = transformed_anchors[[j], :][0].data.cpu().numpy()
+                x1 = int(bbox[0]*origin_img.shape[1]/self.size_image[1])
+                y1 = int(bbox[1]*origin_img.shape[0]/self.size_image[0])
+                x2 = int(bbox[2]*origin_img.shape[1]/self.size_image[1])
+                y2 = int(bbox[3]*origin_img.shape[0]/self.size_image[0])
+                bboxes.append([x1, y1, x2, y2])
+                label_name = VOC_CLASSES[int(classification[[j]])]
+                labels.append(label_name)
+                try:
+                    bbox_features = features[:,x1:x2,y1:y2]
+                    bbox_features = transforms.Resize((7,7))(bbox_features)
+                    values.append((scores[[j]].cpu().numpy()[0],bbox_features))
+                except Exception as e:
+                    continue
+            values.append((1000000,transforms.Resize((7,7))(features)))
+            values.sort(key=lambda x: x[0], reverse=True)
+            stack_list = []
+            for i in range(min(len(values), args.max_num_boxes)):
+                stack_list.append(np.expand_dims(values[i][1].cpu().numpy(),axis=0))
+            feat['frames'] = np.vstack(stack_list)
+
 
             # forward model
             m_out = model.step(feat)

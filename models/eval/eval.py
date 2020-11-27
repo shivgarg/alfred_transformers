@@ -4,9 +4,12 @@ import random
 import time
 import torch
 import torch.multiprocessing as mp
-from models.nn.resnet import Resnet
 from data.preprocess import Dataset
 from importlib import import_module
+from models import EfficientDet
+from torchvision import transforms
+from utils import EFFICIENTDET
+from datasets import get_augumentation, VOC_CLASSES
 
 class Eval(object):
 
@@ -45,9 +48,16 @@ class Eval(object):
             dataset.preprocess_splits(self.splits)
 
         # load resnet
-        args.visual_model = 'resnet18'
-        self.resnet = Resnet(args, eval=True, share_memory=True, use_conv_feat=True)
-
+        self.object_extractor =  EfficientDet(num_classes=21,
+                                  network='efficientdet-d0',
+                                  W_bifpn=EFFICIENTDET[network]['W_bifpn'],
+                                  D_bifpn=EFFICIENTDET[network]['D_bifpn'],
+                                  D_class=EFFICIENTDET[network]['D_class'],
+                                  is_training=False
+                                  )
+        
+        self.model.load_state_dict(torch.load(args.weight)['state_dict'])
+        self.tfms = get_augumentation(phase='test')
         # gpu
         if self.args.gpu:
             self.model = self.model.to(torch.device('cuda'))
@@ -85,7 +95,7 @@ class Eval(object):
         threads = []
         lock = self.manager.Lock()
         for n in range(self.args.num_threads):
-            thread = mp.Process(target=self.run, args=(self.model, self.resnet, task_queue, self.args, lock,
+            thread = mp.Process(target=self.run, args=(self.model, self.object_extractor, task_queue, self.args, lock,
                                                        self.successes, self.failures, self.results))
             thread.start()
             threads.append(thread)
