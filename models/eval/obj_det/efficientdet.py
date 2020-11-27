@@ -6,6 +6,7 @@ from obj_det.bifpn import BIFPN
 from .retinahead import RetinaHead
 from obj_det.module import RegressionModel, ClassificationModel, Anchors, ClipBoxes, BBoxTransform
 from torchvision.ops import nms
+from torchvision import transforms
 from .losses import FocalLoss
 MODEL_MAP = {
     'efficientdet-d0': 'efficientnet-b0',
@@ -30,7 +31,7 @@ class EfficientDet(nn.Module):
                  threshold=0.01,
                  iou_threshold=0.5):
         super(EfficientDet, self).__init__()
-        self.backbone = EfficientNet.from_pretrained(MODEL_MAP[network])
+        self.backbone = EfficientNet.from_name(MODEL_MAP[network])
         self.is_training = is_training
         self.neck = BIFPN(in_channels=self.backbone.get_list_features()[-5:],
                           out_channels=W_bifpn,
@@ -83,7 +84,7 @@ class EfficientDet(nn.Module):
                 transformed_anchors[0, :, :], scores[0, :, 0], iou_threshold=self.iou_threshold)
             nms_scores, nms_class = classification[0, anchors_nms_idx, :].max(
                 dim=1)
-            return [nms_scores, nms_class, transformed_anchors[0, anchors_nms_idx, :]]
+            return [nms_scores, nms_class, transformed_anchors[0, anchors_nms_idx, :], x[0]]
 
     def freeze_bn(self):
         '''Freeze BatchNorm layers.'''
