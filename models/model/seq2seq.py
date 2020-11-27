@@ -139,7 +139,7 @@ class Module(nn.Module):
             # self.summary_writer.add_scalar('train/total_loss', m_train['total_loss'], train_iter)
 
             # compute metrics for valid_seen
-            """
+            """            
             p_valid_seen, valid_seen_iter, total_valid_seen_loss, m_valid_seen = self.run_pred(valid_seen, args=args, name='valid_seen', iter=valid_seen_iter)
             m_valid_seen.update(self.compute_metric(p_valid_seen, valid_seen))
             m_valid_seen['total_loss'] = float(total_valid_seen_loss)
@@ -195,20 +195,19 @@ class Module(nn.Module):
                     json.dump(self.make_debug(p_valid_unseen, valid_unseen), f, indent=2)
 
                 best_loss['valid_unseen'] = total_valid_unseen_loss
-
+            """
             # save the latest checkpoint
             if args.save_every_epoch:
                 fsave = os.path.join(args.dout, 'net_epoch_%d.pth' % epoch)
             else:
                 fsave = os.path.join(args.dout, 'latest.pth')
             torch.save({
-                'metric': stats,
                 'model': self.state_dict(),
                 'optim': optimizer.state_dict(),
                 'args': self.args,
                 'vocab': self.vocab,
             }, fsave)
-
+            """
             ## debug action output json for train
             # fpred = os.path.join(args.dout, 'train.debug.preds.json')
             # with open(fpred, 'wt') as f:
@@ -337,14 +336,14 @@ class Module(nn.Module):
             param_group['lr'] = lr
 
     @classmethod
-    def load(cls, fsave):
+    def load(cls, args, fsave):
         '''
         load pth model from disk
         '''
         save = torch.load(fsave)
-        model = cls(save['args'], save['vocab'])
+        model = cls(args, save['vocab'])
         model.load_state_dict(save['model'])
-        optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
         optimizer.load_state_dict(save['optim'])
         return model, optimizer
 

@@ -66,6 +66,8 @@ if __name__ == '__main__':
     parser.add_argument('--ckpt_ratio', help = 'ckpt epoch ratio', default=0.05, type=float)
     parser.add_argument('--bidaf_dim', help = 'bidaf common embedding dim length', default=1536, type=int)
     parser.add_argument('--focal_alpha', help = 'alpha val for focal loss', default=2.0, type=float)
+    parser.add_argument('--freeze', help='freeze backbone', action='store_true')
+    
     args = parser.parse_args()
     args.dout = args.dout.format(**vars(args))
     torch.manual_seed(args.seed)
@@ -97,7 +99,7 @@ if __name__ == '__main__':
     M = import_module('model.{}'.format(args.model))
     if args.resume:
         print("Loading: " + args.resume)
-        model, optimizer = M.Module.load(args.resume)
+        model, optimizer = M.Module.load(args,args.resume)
     else:
         model = M.Module(args, vocab)
         optimizer = None

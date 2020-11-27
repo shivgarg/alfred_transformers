@@ -333,11 +333,15 @@ class RegNet(nn.Module):
     visual encoder
     '''
 
-    def __init__(self, dframe):
+    def __init__(self, dframe,freeze=False):
         super(RegNet, self).__init__()
         self.dframe = dframe
         self.flattened_size = 64*7*7
         self.regnet = nn.Sequential(*list(pycls.models.regnety("600MF",pretrained=True).children())[:-1])
+        if freeze:
+            print("Freezing RegNet backbone")
+            for param in self.regnet.parameters():
+                param.requires_grad=False
         self.conv1 = nn.Conv2d(608, 256, kernel_size=1, stride=1, padding=0)
         self.conv2 = nn.Conv2d(256, 64, kernel_size=1, stride=1, padding=0)
         self.fc = nn.Linear(self.flattened_size, self.dframe)
@@ -362,14 +366,14 @@ class ConvFrameMaskDecoderProgressMonitorRegNet(nn.Module):
 
     def __init__(self, emb, dframe, dhid, pframe=300,
                  attn_dropout=0., hstate_dropout=0., actor_dropout=0., input_dropout=0.,
-                 teacher_forcing=False):
+                 teacher_forcing=False,freeze=False):
         super().__init__()
         demb = emb.weight.size(1)
 
         self.emb = emb
         self.pframe = pframe
         self.dhid = dhid
-        self.vis_encoder = RegNet(dframe=dframe)
+        self.vis_encoder = RegNet(dframe=dframe,freeze=freeze)
         self.cell = nn.LSTMCell(dhid+dframe+demb, dhid)
         self.attn = DotAttn()
         self.input_dropout = nn.Dropout(input_dropout)

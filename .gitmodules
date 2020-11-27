@@ -1,3 +1,0 @@
-[submodule "models/model/UNITER"]
-	path = models/model/UNITER
-	url = git@github.com:shivgarg/UNITER.git
