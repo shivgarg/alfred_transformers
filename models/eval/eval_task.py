@@ -65,8 +65,35 @@ class EvalTask(Eval):
                 break
 
             # extract visual features
-            curr_image = Image.fromarray(np.uint8(env.last_event.frame))
-            feat['frames'] = resnet.featurize([curr_image], batch=1).unsqueeze(0)
+            curr_image = np.uint8(env.last_event.frame)
+            h,w,_= curr_image.shape
+            curr_image = tfms(image=curr_image)['image'].unsqueeze(0).to(torch.device('cuda'))
+            scores, classification, transformed_anchors, features = object_detector(curr_image)
+            features = transforms.Resize((300,300))(features).squeeze().detach()
+            bboxes = list()
+            bbox_scores = list()
+            colors = list()
+            values = []
+            for j in range(scores.shape[0]):
+                bbox = transformed_anchors[[j], :][0].data.detach().cpu().numpy()
+                x1 = int(bbox[0]*w/512)
+                y1 = int(bbox[1]*h/512)
+                x2 = int(bbox[2]*w/512)
+                y2 = int(bbox[3]*h/512)
+                bboxes.append([x1, y1, x2, y2])
+                try:
+                    bbox_features = features[:,x1:x2,y1:y2]
+                    bbox_features = transforms.Resize((7,7))(bbox_features)
+                    values.append((scores[[j]].detach().cpu().numpy()[0],bbox_features))
+                except Exception as e:
+                    print(e)
+                    continue
+            values.append((1000000,transforms.Resize((7,7))(features)))
+            values.sort(key=lambda x: x[0], reverse=True)
+            stack_list = []
+            for i in range(min(len(values), 10)):
+                stack_list.append(values[i][1].detach().unsqueeze(0))
+            feat['frames'] = torch.vstack(stack_list).unsqueeze(0).unsqueeze(0).to('cuda')
 
             # forward model
             m_out = model.step(feat)
