@@ -66,6 +66,7 @@ class Eval(object):
         self.tfms = get_augumentation(phase='test')
         # gpu
         if self.args.gpu:
+            self.object_extractor = self.object_extractor.to(torch.device('cuda'))
             self.model = self.model.to(torch.device('cuda'))
 
         # success and failure lists

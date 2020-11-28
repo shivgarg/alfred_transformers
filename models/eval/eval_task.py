@@ -69,7 +69,7 @@ class EvalTask(Eval):
             # extract visual features
             curr_image = np.uint8(env.last_event.frame)
             h,w,_= curr_image.shape
-            curr_image = tfms(image=curr_image)['image'].unsqueeze(0)
+            curr_image = tfms(image=curr_image)['image'].unsqueeze(0).to(torch.device('cuda'))
             scores, classification, transformed_anchors, features = object_detector(curr_image)
             features = transforms.Resize((300,300))(features).squeeze().detach()
             bboxes = list()
