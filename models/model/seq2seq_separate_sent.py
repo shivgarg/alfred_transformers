@@ -234,7 +234,8 @@ class Module(Base):
             'state_t': None,
             'e_t': None,
             'cont_lang': None,
-            'enc_lang': None
+            'enc_lang': None,
+            'enc_goal': None
         }
 
     def step(self, feat, prev_action=None):
@@ -244,9 +245,9 @@ class Module(Base):
 
         # encode language features
         if self.r_state['cont_lang'] is None and self.r_state['enc_lang'] is None:
-            self.r_state['cont_lang'], self.r_state['enc_lang'], enc_goal = self.encode_lang(feat)
+            self.r_state['cont_lang'], self.r_state['enc_lang'], self.r_state['enc_goal'] = self.encode_lang(feat)
 
-        enc_goal = F.relu(self.fc(enc_goal))
+        enc_goal_fc = F.relu(self.fc(self.r_state['enc_goal']))
         # initialize embedding and hidden states
         if self.r_state['e_t'] is None and self.r_state['state_t'] is None:
             self.r_state['e_t'] = self.dec.go.repeat(self.r_state['enc_lang'].size(0), 1)
@@ -256,7 +257,7 @@ class Module(Base):
         e_t = self.embed_action(prev_action) if prev_action is not None else self.r_state['e_t']
 
         # decode and save embedding and hidden states
-        out_action_low, out_action_low_mask, state_t, *_ = self.dec.step(self.r_state['enc_lang'], enc_goal, feat['frames'][:, 0], e_t=e_t, state_tm1=self.r_state['state_t'])
+        out_action_low, out_action_low_mask, state_t, *_ = self.dec.step(self.r_state['enc_lang'], enc_goal_fc, feat['frames'][:, 0], e_t=e_t, state_tm1=self.r_state['state_t'])
 
         # save states
         self.r_state['state_t'] = state_t
