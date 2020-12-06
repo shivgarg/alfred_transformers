@@ -23,7 +23,10 @@ class Module(Base):
         # encoder and self-attention
         self.tokenizer = transformers.RobertaTokenizer.from_pretrained("roberta-base")
         self.enc = transformers.RobertaModel.from_pretrained('roberta-base', return_dict=True)
+        for param in self.enc.parameters():
+            param.requires_grad = False
         self.enc_att = vnn.SelfAttn(768)
+        self.enc_fc = nn.Linear(768, 768)
 
         # subgoal monitoring
         self.subgoal_monitoring = (self.args.pm_aux_loss_wt > 0 or self.args.subgoal_aux_loss_wt > 0)
@@ -193,6 +196,7 @@ class Module(Base):
         lang_goal_instr = feat['lang_goal_instr']
         roberta_output = self.enc(**lang_goal_instr)
         roberta_output_last_layer_vec = roberta_output.last_hidden_state
+        roberta_output_last_layer_vec = F.relu(self.enc_fc(roberta_output_last_layer_vec))
         self.lang_dropout(roberta_output_last_layer_vec)
         cont_roberta_output = self.enc_att(roberta_output_last_layer_vec)
 
