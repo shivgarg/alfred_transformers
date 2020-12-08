@@ -4,9 +4,12 @@ import random
 import time
 import torch
 import torch.multiprocessing as mp
-from models.nn.resnet import Resnet
 from data.preprocess import Dataset
 from importlib import import_module
+from obj_det import EfficientDet
+from torchvision import transforms
+from utils import EFFICIENTDET
+from datasets import get_augumentation, VOC_CLASSES
 
 class Eval(object):
 
@@ -44,10 +47,23 @@ class Eval(object):
             dataset = Dataset(self.model.args, self.model.vocab)
             dataset.preprocess_splits(self.splits)
 
-        # load resnet
-        args.visual_model = 'resnet18'
-        self.resnet = Resnet(args, eval=True, share_memory=True, use_conv_feat=True)
+        checkpoint = torch.load(args.weights, map_location=lambda storage, loc: storage)
+        params = checkpoint['parser']
+        num_class = params.num_class
+        network = params.network
 
+        # load resnet
+        self.object_extractor =  EfficientDet(num_classes=num_class,
+                                  network=network,
+                                  W_bifpn=EFFICIENTDET[network]['W_bifpn'],
+                                  D_bifpn=EFFICIENTDET[network]['D_bifpn'],
+                                  D_class=EFFICIENTDET[network]['D_class'],
+                                  is_training=False
+                                  )
+        
+        self.object_extractor.load_state_dict(checkpoint['state_dict'])
+        self.object_extractor.eval()
+        self.tfms = get_augumentation(phase='test')
         # gpu
         if self.args.gpu:
             self.object_extractor = self.object_extractor.to(torch.device('cuda'))
@@ -86,7 +102,7 @@ class Eval(object):
         threads = []
         lock = self.manager.Lock()
         for n in range(self.args.num_threads):
-            thread = mp.Process(target=self.run, args=(self.model, self.resnet, task_queue, self.args, lock,
+            thread = mp.Process(target=self.run, args=(self.model, self.object_extractor, self.tfms, task_queue, self.args, lock,
                                                        self.successes, self.failures, self.results))
             thread.start()
             threads.append(thread)

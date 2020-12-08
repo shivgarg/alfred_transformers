@@ -38,9 +38,11 @@ class BiDAFModule(nn.Module):
         super().__init__()
     
     def forward(self, context, query):
+        batch = context.shape[0]
         query = query.permute([0,2,1])
         attn_scores = torch.bmm(context, query)
-        q2c = F.softmax(torch.max(attn_scores,2,keepdim=True).values,dim=1).permute([0,2,1]).bmm(context).squeeze()
+        q2c = F.softmax(torch.max(attn_scores,2,keepdim=True).values,dim=1).permute([0,2,1]).bmm(context)
+        q2c = q2c.view(batch,-1)
         c2q = F.softmax(attn_scores,2)
         query = query.permute([0,2,1])
         c2q = torch.bmm(c2q,query)
