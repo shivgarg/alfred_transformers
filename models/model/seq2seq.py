@@ -90,6 +90,8 @@ class Module(nn.Module):
         ckpt_steps = max(1,math.floor(args.ckpt_ratio*len(train)/args.batch))
         #train_dataset = LoadDataset(args.batch, self, train)
         #train_dataloader = DataLoader(train_dataset, batch_size=1,shuffle=True, num_workers=2) 
+        running_loss = []
+        print("Ckpt steps:", ckpt_steps)
         for epoch in trange(0, args.epoch, desc='epoch'):
             sys.stdout.flush()
             m_train = collections.defaultdict(list)
@@ -111,10 +113,13 @@ class Module(nn.Module):
                 # optimizer backward pass
                 #optimizer.zero_grad()
                 sum_loss = sum(loss.values())
-                print(sum_loss.item())
+                running_loss.append(sum_loss.item())
+                if len(running_loss) > 100:
+                    running_loss = running_loss[-100:]
                 sum_loss.backward()
                 count += 1
                 if count % ckpt_steps == 0:
+                    print("Loss:",sum(running_loss)/len(running_loss))
                     fsave = os.path.join(args.dout, 'latest.pth')
                     torch.save({
                            'model': self.state_dict(),

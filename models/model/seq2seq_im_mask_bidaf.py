@@ -112,8 +112,9 @@ class Module(Base):
                 imgs = sorted(os.listdir(path))
                 count = 0
                 for img in imgs:
-                    if img.endswith('.npz'):
+                    if img.endswith('.npz') and ('faster' in img):
                         tmp = torch.from_numpy(np.load("{}/{}".format(path,img))['features'])
+                        tmp = F.pad(tmp, (0,0,0,0,0,0,0,11-tmp.shape[0]))
                         im.append(tmp)
                         count+=1
                 im = pad_sequence(im, batch_first=True)
