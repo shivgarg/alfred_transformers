@@ -341,14 +341,14 @@ class Module(nn.Module):
             param_group['lr'] = lr
 
     @classmethod
-    def load(cls, args, fsave):
+    def load(cls, fsave):
         '''
         load pth model from disk
         '''
         save = torch.load(fsave)
-        model = cls(args, save['vocab'])
+        model = cls(save['args'], save['vocab'])
         model.load_state_dict(save['model'])
-        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+        optimizer = torch.optim.Adam(model.parameters(), lr=save['args'].lr)
         optimizer.load_state_dict(save['optim'])
         return model, optimizer
 

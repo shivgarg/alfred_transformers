@@ -44,7 +44,7 @@ if __name__ == '__main__':
     parser.add_argument('--debug', dest='debug', action='store_true')
     parser.add_argument('--fast_epoch', dest='fast_epoch', action='store_true')
     parser.add_argument('--weights', help='pretrained weights of efficientdet-d0')
-
+    parser.add_argument('--demb', help='language embedding size', default=100, type=int)
     # parse arguments
     args = parser.parse_args()
 

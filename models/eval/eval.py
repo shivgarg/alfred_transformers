@@ -7,7 +7,7 @@ import torch.multiprocessing as mp
 from data.preprocess import Dataset
 from importlib import import_module
 from obj_det import EfficientDet
-from torchvision import transforms
+from torchvision import transforms, models
 from utils import EFFICIENTDET
 from datasets import get_augumentation, VOC_CLASSES
 
@@ -47,23 +47,11 @@ class Eval(object):
             dataset = Dataset(self.model.args, self.model.vocab)
             dataset.preprocess_splits(self.splits)
 
-        checkpoint = torch.load(args.weights, map_location=lambda storage, loc: storage)
-        params = checkpoint['parser']
-        num_class = params.num_class
-        network = params.network
-
         # load resnet
-        self.object_extractor =  EfficientDet(num_classes=num_class,
-                                  network=network,
-                                  W_bifpn=EFFICIENTDET[network]['W_bifpn'],
-                                  D_bifpn=EFFICIENTDET[network]['D_bifpn'],
-                                  D_class=EFFICIENTDET[network]['D_class'],
-                                  is_training=False
-                                  )
-        
-        self.object_extractor.load_state_dict(checkpoint['state_dict'])
+        self.object_extractor = models.detection.fasterrcnn_resnet50_fpn(pretrained=True).to('cuda')
         self.object_extractor.eval()
-        self.tfms = get_augumentation(phase='test')
+        self.tfms = transforms.Compose([transforms.ToTensor(),
+                                        transforms.Normalize(mean=[0.485,0.456,0.406],std=[0.229,0.224,0.225])])
         # gpu
         if self.args.gpu:
             self.object_extractor = self.object_extractor.to(torch.device('cuda'))
