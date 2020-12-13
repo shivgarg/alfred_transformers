@@ -33,6 +33,7 @@ Download Trajectory JSONs and Resnet feats (~17GB):
 ```bash
 $ cd $ALFRED_ROOT/data
 $ sh download_data.sh json_feat
+$ sh download_data.sh full
 ```
 
 Train models:
@@ -40,6 +41,15 @@ Train models:
 $ cd $ALFRED_ROOT
 $ python models/train/train_seq2seq.py --data data/json_feat_2.1.0 --model seq2seq_im_mask --dout exp/model:{model},name:pm_and_subgoals_01 --splits data/splits/oct21.json --gpu --batch 8 --pm_aux_loss_wt 0.1 --subgoal_aux_loss_wt 0.1
 ```
+Models Details:
+1. bidaf branch contains BiDAF+EfficientDet Implementation. This requires to preprocess data to extract bounding box features and store as npz files.
+2. bidaf_faster contains BiDAF+fasterrcnn Implementation.
+3. roberta_freeze contains RoBERRTa model in which RoBERTa is kept frozen.
+4. roberta contains the code wherer roberta model is finetuned.
+5. sentence_bert contains per sentence based attention where sentence embedding are extracted using Sentence BERT
+6. separate_sent contains code where per sentence based attention is implemented using [CLS] token from RoBERTa as the representation.
+7. single_gpe_resnet contains code to finetune ResNet-18 and both the experiments wher RegNetY is used.
+
 
 ## More Info 
 
